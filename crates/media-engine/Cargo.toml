@@ -1,0 +1,12 @@
+[package]
+name = "media-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+media-stream = { path = "../media-stream" }
+shared-protocol = { path = "../shared-protocol" }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid.workspace = true
