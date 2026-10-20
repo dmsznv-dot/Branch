@@ -6,7 +6,7 @@
 
 **Architecture:** Четыре независимых от UI crate: shared-protocol → sync-engine → room-server; media-stream использует их публичные контракты. RoomServer проверяет сессию и права, выдаёт отзываемый MediaPermit; HTTP-адаптер проверяет локальную capability и разрешение до чтения и перед каждым отправляемым чанком. Время задаётся явно и не зависит от системной даты.
 
-**Tech Stack:** Rust 1.99.1, edition 2024; Tokio 1, axum =0.8.9, hyper 1/server/http1 и hyper-util 0.1/tokio/service, serde 1/serde_json 1, uuid 1, bytes 1, tokio-util 0.7, getrandom 0.3, sha2 0.10, subtle 2, base64 0.22, thiserror 2. Dev: reqwest 0.12 с rustls, tempfile 3, futures-util 0.3. Cargo.lock фиксируется в первой задаче. Прямые зависимости добавляются только использующим их crate.
+**Tech Stack:** Rust 1.99.1, edition 2024; Tokio 1, axum =0.8.9, hyper 1/server/http1 и hyper-util 0.1/tokio/service, serde 1/serde_json 1, uuid 1, bytes 1, tokio-util 0.7, getrandom 0.4, arc-swap 1, sha2 0.10, subtle 2, base64 0.22, thiserror 2. Dev: reqwest 0.12 с rustls, tempfile 3, futures-util 0.3. Cargo.lock фиксируется в первой задаче. Прямые зависимости добавляются только использующим их crate.
 
 **Spec:** [Утверждённая архитектура](../specs/2026-10-20-watch-together-design.md), [карта подпроектов и покрытия](2026-10-20-prototype-roadmap.md).
 
@@ -24,7 +24,7 @@
 - Закрытие и исключение отменяют активные передачи; уже доставленные байты не считаются отозванными.
 - Передача оригинальных байтов без транскодирования. WebRTC/TURN, libmpv/Tauri и целевые bundle реализуются следующими подпроектами B/C/D.
 - Установка сохраняет TLS, checksum и подписи; секреты не выводятся и не коммитятся.
-- Использовать `/workspace/Branch`; не создавать worktree. Архитектура утверждена, данный план ещё ожидает review пользователя.
+- Использовать `/workspace/Branch`; не создавать worktree. Архитектура и план утверждены пользователем; задачи A1–A6 реализованы и прошли task review.
 
 ## Review Focus
 
@@ -72,7 +72,7 @@
 - Produces `PlaybackCommand::{Play,Pause,Seek{position_ms:WireU64},SetSpeed{speed:Speed}}` и `CommandEnvelope { room_id:RoomId, media_id:MediaId, command_id:CommandId, issued_at:HostTime, action:PlaybackCommand }`. Автор не приходит из JSON; issued_at — оценка монотонного времени хоста, не календарная дата.
 - Produces `ErrorCode::{InvalidInput,Unauthorized,Forbidden,RoomFull,RoomClosed,MediaChanged,CommandConflict,CommandExpired,RateLimited,ClockMismatch,CounterExhausted}`. Входные объекты имеют camelCase поля и `deny_unknown_fields`.
 
-- [ ] **Step 1: Создать минимальный workspace и контрактные тесты до реализации типов.** В setup использовать официальный rustup-init для `x86_64-unknown-linux-gnu`, скачать соответствующий `.sha256`, проверить `sha256sum -c` с включённым TLS; `RUSTUP_HOME=/workspace/.toolchains/rustup`, `CARGO_HOME=/workspace/.toolchains/cargo`, `--profile minimal --default-toolchain 1.99.1 --no-modify-path -y`. Скрипт проверяет уже установленную версию и не переустанавливает её. `rust-toolchain.toml` закрепляет 1.99.1 + rustfmt/clippy. Установить toolchain только после review плана. Создать тесты `wire_u64_preserves_precision`, `wire_u64_rejects_noncanonical`, `speed_accepts_only_prd_values`, `input_cannot_claim_actor`:
+- [x] **Step 1: Создать минимальный workspace и контрактные тесты до реализации типов.** В setup использовать официальный rustup-init для `x86_64-unknown-linux-gnu`, скачать соответствующий `.sha256`, проверить `sha256sum -c` с включённым TLS; `RUSTUP_HOME=/workspace/.toolchains/rustup`, `CARGO_HOME=/workspace/.toolchains/cargo`, `--profile minimal --default-toolchain 1.99.1 --no-modify-path -y`. Скрипт проверяет уже установленную версию и не переустанавливает её. `rust-toolchain.toml` закрепляет 1.99.1 + rustfmt/clippy. Установить toolchain только после review плана. Создать тесты `wire_u64_preserves_precision`, `wire_u64_rejects_noncanonical`, `speed_accepts_only_prd_values`, `input_cannot_claim_actor`:
 
 ```rust
 assert_eq!(serde_json::to_string(&WireU64::new(9_007_199_254_740_993)).unwrap(), "\"9007199254740993\"");
@@ -85,10 +85,10 @@ assert!(Speed::try_from(f64::NAN).is_err());
 
 Дополнительно: `-1`, infinity, 0.1, JSON unknown action, `participantId` в CommandEnvelope и невалидный UUID отклоняются; полное RoomSnapshot roundtrip сохраняет типы и значения.
 
-- [ ] **Step 2: Зафиксировать RED.** Из корня с активированным toolchain: `cargo test -p shared-protocol --test wire_contract`. Ожидается ошибка компиляции отсутствующих типов/методов; сетевой сбой установки не считается RED теста.
-- [ ] **Step 3: Реализовать указанные типы и serde.** Рациональные скорости без произвольных float; разбор u64 через checked parsing. Создать Cargo.lock обычным разрешением зависимостей один раз; последующие команды `--locked`.
-- [ ] **Step 4: Зафиксировать GREEN и повторяемость setup.** Повторить setup, затем `cargo test --locked -p shared-protocol --test wire_contract` и `cargo fmt --all -- --check`; все названные тесты выполнены, второй setup не меняет toolchain или tracked manifests.
-- [ ] **Step 5: Commit.** Только файлы этой задачи: `chore: establish Rust workspace and protocol contracts`.
+- [x] **Step 2: Зафиксировать RED.** Из корня с активированным toolchain: `cargo test -p shared-protocol --test wire_contract`. Ожидается ошибка компиляции отсутствующих типов/методов; сетевой сбой установки не считается RED теста.
+- [x] **Step 3: Реализовать указанные типы и serde.** Рациональные скорости без произвольных float; разбор u64 через checked parsing. Создать Cargo.lock обычным разрешением зависимостей один раз; последующие команды `--locked`.
+- [x] **Step 4: Зафиксировать GREEN и повторяемость setup.** Повторить setup, затем `cargo test --locked -p shared-protocol --test wire_contract` и `cargo fmt --all -- --check`; все названные тесты выполнены, второй setup не меняет toolchain или tracked manifests.
+- [x] **Step 5: Commit.** Только файлы этой задачи: `chore: establish Rust workspace and protocol contracts`.
 
 ### Task 2: Проекция позиции, часы и решения о коррекции
 
@@ -102,14 +102,14 @@ assert!(Speed::try_from(f64::NAN).is_err());
 - Produces `Correction::{Keep,Rate{effective_speed:f64},Seek{position_ms:u64}}`, `correction(target_ms:u64, observed_ms:u64, status:PlaybackStatus, base:Speed, effective_speed:f64) -> Correction`.
 - Produces `SnapshotCursor::new()`, `accept(&RoomSnapshot) -> Result<bool, SyncError>`: для текущей комнаты применяет только более высокую revision; новый room/clock epoch требует `reset(&RoomSnapshot)`, выполненного после доверенного snapshot reconnect.
 
-- [ ] **Step 1: Написать тесты.** `playing_projects_rational_speed`: 125000 ms, 1.5×, ticks 1000→3000 дают `assert_eq!(...,128000)`; paused остаётся 125000. `projection_clamps_end_and_rejects_epoch` проверяет duration и другую эпоху; назад по ticks — ошибка, системное UTC в API отсутствует. `clock_estimator_ignores_high_rtt`: sample (1000,1510,1512,1022) даёт offset 500, RTT 20; более медленная следующая выборка не заменяет лучшую. Проверить отрицательные интервалы и смену эпохи.
+- [x] **Step 1: Написать тесты.** `playing_projects_rational_speed`: 125000 ms, 1.5×, ticks 1000→3000 дают `assert_eq!(...,128000)`; paused остаётся 125000. `projection_clamps_end_and_rejects_epoch` проверяет duration и другую эпоху; назад по ticks — ошибка, системное UTC в API отсутствует. `clock_estimator_ignores_high_rtt`: sample (1000,1510,1512,1022) даёт offset 500, RTT 20; более медленная следующая выборка не заменяет лучшую. Проверить отрицательные интервалы и смену эпохи.
 
 `correction_boundaries` проверяет оба знака drift: 100→Keep, 101/500→Rate, 501→Seek. При отставании Rate = base×1.02, опережении base×0.98. После схода к ≤100 и effective≠base возвращается Rate с base. Для paused drift>100 сразу Seek; rate не запускает паузу. `stale_snapshot_and_epoch_require_reset` проверяет старую revision, новый mediaId с новой revision и явный reset после reconnect.
 
-- [ ] **Step 2: RED.** `cargo test -p sync-engine`; ожидается отсутствие новых API, а не ноль тестов.
-- [ ] **Step 3: Реализовать алгоритмы.** ClockEstimator хранит восемь последних валидных samples, выбирает минимальный RTT; samples с RTT>2000 ms отклоняет. Offset = `((host_recv-client_send)+(host_send-client_recv))/2` в i128, RTT исключает host processing. Новая host epoch сбрасывает старые samples. Дубликаты snapshot возвращают false, рассогласование room/epoch — ошибку. Коррекция не генерирует PlaybackCommand.
-- [ ] **Step 4: GREEN.** `cargo test --locked -p sync-engine`; `cargo test --locked -p shared-protocol`; тесты не используют sleep/системные часы.
-- [ ] **Step 5: Commit.** `feat: add deterministic playback synchronization`.
+- [x] **Step 2: RED.** `cargo test -p sync-engine`; ожидается отсутствие новых API, а не ноль тестов.
+- [x] **Step 3: Реализовать алгоритмы.** ClockEstimator хранит восемь последних валидных samples, выбирает минимальный RTT; samples с RTT>2000 ms отклоняет. Offset = `((host_recv-client_send)+(host_send-client_recv))/2` в i128, RTT исключает host processing. Новая host epoch сбрасывает старые samples. Дубликаты snapshot возвращают false, рассогласование room/epoch — ошибку. Коррекция не генерирует PlaybackCommand.
+- [x] **Step 4: GREEN.** `cargo test --locked -p sync-engine`; `cargo test --locked -p shared-protocol`; тесты не используют sleep/системные часы.
+- [x] **Step 5: Commit.** `feat: add deterministic playback synchronization`.
 
 ### Task 3: Авторитет комнаты, сессии, права и отзыв
 
@@ -124,17 +124,17 @@ assert!(Speed::try_from(f64::NAN).is_err());
 - Produces async `authorize_media(&self,session:&SessionToken,media_id:MediaId)->Result<MediaPermit,RoomError>`; `MediaPermit::check_active(&self)->Result<(),RoomError>`, `cancelled(&self)` async. Проверка активности использует внедрённые часы и атомарное состояние сессии без блокирующего room lock. Закрытие/исключение/смена media отменяют соответствующие permits; успешное чтение продлевает активность живой сессии.
 - Produces `set_buffering(session, bool)->Result<(),RoomError>`; playback/revision не меняет. `subscribe(session)->Result<tokio::sync::watch::Receiver<RoomSnapshot>,RoomError>` для будущей доставки состояния.
 
-- [ ] **Step 1: Написать тесты политики.** `fifth_allowed_sixth_rejected`, `guest_control_depends_on_mode`, `host_uses_same_apply_path`, `pause_and_speed_project_before_update`, `seek_clamped_to_duration`, `duplicate_is_idempotent`, `duplicate_payload_conflict`, `expired_command_is_not_reapplied`, `buffering_does_not_pause_room`, `wrong_room_or_media_rejected`, `revoke_invite_keeps_existing_session`, `kick_revokes_media_permit`, `close_revokes_all`, `replacement_cancels_old_media`.
+- [x] **Step 1: Написать тесты политики.** `fifth_allowed_sixth_rejected`, `guest_control_depends_on_mode`, `host_uses_same_apply_path`, `pause_and_speed_project_before_update`, `seek_clamped_to_duration`, `duplicate_is_idempotent`, `duplicate_payload_conflict`, `expired_command_is_not_reapplied`, `buffering_does_not_pause_room`, `wrong_room_or_media_rejected`, `revoke_invite_keeps_existing_session`, `kick_revokes_media_permit`, `close_revokes_all`, `replacement_cancels_old_media`.
 
 При paused room revision=0 host Play делает revision=1; повтор такого же `(session,commandId,payload)` возвращает тот же результат и revision=1; другой payload с тем же ID — CommandConflict. Stale mediaId/unauthorized команда не меняет state. Revision::MAX → CounterExhausted без wraparound. `limits_are_bounded` проверяет 21-ю команду за 1000 ms, шестого участника, имя >64 UTF-8 байт и запросы с недопустимыми control characters.
 
-- [ ] **Step 2: RED.** `cargo test -p room-server`; ошибки отсутствующих API должны соответствовать текущей задаче.
-- [ ] **Step 3: Реализовать комнату.** Сериализовать мутации одним mutex, не держать lock во время I/O. Зафиксировать monotonic clock epoch при create; initial Paused/position=0/speed=1/revision=0. Команды ограничены 20/s/session fixed window; новые joins — 10/min/room. Дедупликация хранит максимум 256 команд на сессию в течение 120000 ms. Команды с issued_at старше 120000 ms или из будущего более чем на 2000 ms отклонять до выполнения, а не повторять после eviction. Смена payload, включая issued_at, при прежнем commandId даёт CommandConflict. Если cache заполнен неистёкшими результатами, возвращать RateLimited для нового commandId. Все wall-clock timestamps отсутствуют.
+- [x] **Step 2: RED.** `cargo test -p room-server`; ошибки отсутствующих API должны соответствовать текущей задаче.
+- [x] **Step 3: Реализовать комнату.** Сериализовать мутации одним mutex, не держать lock во время I/O. Зафиксировать monotonic clock epoch при create; initial Paused/position=0/speed=1/revision=0. Команды ограничены 20/s/session fixed window; новые joins — 10/min/room. Дедупликация хранит максимум 256 команд на сессию до issued_at+120000 ms (не более 122000 ms после принятия при разрешённом будущем timestamp). Команды с issued_at старше 120000 ms или из будущего более чем на 2000 ms отклонять до выполнения, а не повторять после eviction. Смена payload, включая issued_at, при прежнем commandId даёт CommandConflict. Если cache заполнен неистёкшими результатами, возвращать RateLimited для нового commandId. Все wall-clock timestamps отсутствуют.
 
 Сессии имеют период неактивности 300000 ms; apply/authorize/snapshot/status и активное чтение обновляют activity через внедрённый Clock. До продления всегда проверяется, что срок не истёк. Монотонное время внутри комнаты не идёт назад; другая epoch требует новой комнаты. watch не включает токены; один слот last-state на сессию, максимум8 подписок на комнату. Новый mediaId обязателен при replace, initial playback reset, revision растёт. Ключи приглашения отдельно от session; закрытие завершает watch, удаляет секретные привязки и отменяет permits.
 
-- [ ] **Step 4: GREEN.** `cargo test --locked -p room-server` и существующие тесты protocol/sync. Детерминированно продвинуть ManualClock на 300001 ms — сессия больше не получает permit. Отдельно продвинуть на 120001 ms — старая команда не применяется снова.
-- [ ] **Step 5: Commit.** `feat: enforce authoritative rooms and revocable sessions`.
+- [x] **Step 4: GREEN.** `cargo test --locked -p room-server` и существующие тесты protocol/sync. Детерминированно продвинуть ManualClock на 300001 ms — сессия больше не получает permit. Отдельно продвинуть на 120001 ms — старая команда не применяется снова.
+- [x] **Step 5: Commit.** `feat: enforce authoritative rooms and revocable sessions`.
 
 ### Task 4: Range и ограниченное чтение выбранного файла
 
@@ -145,14 +145,14 @@ assert!(Speed::try_from(f64::NAN).is_err());
 - Produces `SelectedMedia::open(path:&Path, media_id:MediaId)->Result<Self,StreamError>`, `descriptor(duration_ms:u64)->MediaDescriptor`, `read_chunk(&self, permit:&MediaPermit, offset:u64, max_len:usize)->Result<bytes::Bytes,StreamError>`; файл открывается один раз только из доверенного Rust-вызова.
 - Produces `CHUNK_BYTES:usize=65536`, `MAX_READERS_PER_SESSION:usize=2`, `MAX_READERS_PER_ROOM:usize=8`. Разрешение на reader удерживается RAII до завершения потока.
 
-- [ ] **Step 1: Написать табличные тесты.** Для size=10: `bytes=0-0`→(0,1), `bytes=9-`→(9,1), `bytes=-3`→(7,3), `bytes=7-999`→(7,3), `bytes=-99`→(0,10), `bytes=10-`/`bytes=-0`/`bytes=8-7`→Unsatisfiable. Для size=0 любой удовлетворяющий синтаксису range→Unsatisfiable. `bytes=0-1,5-6`→Multiple; unknown unit, лишний дефис, знак, u64 overflow→Malformed. Внешний HTTP пробел разрешён только до/после всего значения.
+- [x] **Step 1: Написать табличные тесты.** Для size=10: `bytes=0-0`→(0,1), `bytes=9-`→(9,1), `bytes=-3`→(7,3), `bytes=7-999`→(7,3), `bytes=-99`→(0,10), `bytes=10-`/`bytes=-0`/`bytes=8-7`→Unsatisfiable. Для size=0 любой удовлетворяющий синтаксису range→Unsatisfiable. `bytes=0-1,5-6`→Multiple; unknown unit, лишний дефис, знак, u64 overflow→Malformed. Внешний HTTP пробел разрешён только до/после всего значения.
 
 `sparse_offset_over_4gib` создаёт sparse fixture с маркером на offset=4294967312 и читает точные байты; `path_replacement_does_not_reopen` открывает выбранный файл, затем меняет путь, подтверждает чтение старого дескриптора; `truncated_source_reports_change` усечение даёт MediaChanged/UnexpectedEof без выдачи некорректных байтов; `cancelled_permit_stops_read` исключает участника до чтения. Система без поддержки sparse/rename отмечается отдельно, а не как прошедший тест.
 
-- [ ] **Step 2: RED.** `cargo test -p media-stream --test range --test selected_file`.
-- [ ] **Step 3: Реализовать source и parser.** checked arithmetic, конец включителен только в заголовке; внутри start+len проверяется без переполнения. Читать не более min(max_len,65536,remaining), не весь range в Vec. Один mutex на открытый tokio File охватывает seek+read: клонированные дескрипторы могут делить file offset, поэтому параллельные seek без синхронизации запрещены. Проверять permit до чтения и после await; изменение длины/mtime отменяет выдачу этого mediaId как MediaChanged. Удаление пути не разрешает переоткрыть другой файл. Размер 0 — нормальная метаинформация.
-- [ ] **Step 4: GREEN.** Запустить тесты media-stream и room-server; тест `concurrent_ranges_do_not_share_cursor` читает параллельно два разных маркера и проверяет оба результата.
-- [ ] **Step 5: Commit.** `feat: stream bounded ranges from selected file handles`.
+- [x] **Step 2: RED.** `cargo test -p media-stream --test range --test selected_file`.
+- [x] **Step 3: Реализовать source и parser.** checked arithmetic, конец включителен только в заголовке; внутри start+len проверяется без переполнения. Читать не более min(max_len,65536,remaining), не весь range в Vec. Один mutex на открытый tokio File охватывает seek+read: клонированные дескрипторы могут делить file offset, поэтому параллельные seek без синхронизации запрещены. Проверять permit до чтения и после await; изменение длины/mtime отменяет выдачу этого mediaId как MediaChanged. Удаление пути не разрешает переоткрыть другой файл. Размер 0 — нормальная метаинформация.
+- [x] **Step 4: GREEN.** Запустить тесты media-stream и room-server; тест `concurrent_ranges_do_not_share_cursor` читает параллельно два разных маркера и проверяет оба результата.
+- [x] **Step 5: Commit.** `feat: stream bounded ranges from selected file handles`.
 
 ### Task 5: Реальный защищённый loopback HTTP
 
@@ -163,14 +163,14 @@ assert!(Speed::try_from(f64::NAN).is_err());
 - Endpoint только `/media/{mediaId}`, методы GET/HEAD. Авторизация: точный `Host=127.0.0.1:<assigned-port>`, `Authorization: Bearer <local capability>`, активная session и mediaId. SessionToken хранится в сервере, не передаётся в URL. capability не равна InvitationToken/SessionToken. Другие маршруты→404 без файлового API.
 - Body: pull-driven stream, очередь максимум два чанка на запрос. Перед чтением и перед yield проверяются permit и отмена; источники/сессии не клонируются с расширением прав.
 
-- [ ] **Step 1: Написать HTTP-тесты через реальный TCP.** `get_exact_range` для файла `0123456789`, range `bytes=2-4`: status=206, body=`234`, Content-Range=`bytes 2-4/10`, Content-Length=`3`, Accept-Ranges=`bytes`. `head_has_full_length_and_no_body`: HEAD с Range→200, длина10, пустое тело. GET без range→200/полные10; size0 без range→200/длина0; unsatisfiable→416 с `bytes */10`; malformed/multiple→400. Content-Type=`application/octet-stream`, Cache-Control=`no-store`.
+- [x] **Step 1: Написать HTTP-тесты через реальный TCP.** `get_exact_range` для файла `0123456789`, range `bytes=2-4`: status=206, body=`234`, Content-Range=`bytes 2-4/10`, Content-Length=`3`, Accept-Ranges=`bytes`. `head_has_full_length_and_no_body`: HEAD с Range→200, длина10, пустое тело. GET без range→200/полные10; size0 без range→200/длина0; unsatisfiable→416 с `bytes */10`; malformed/multiple→400. Content-Type=`application/octet-stream`, Cache-Control=`no-store`.
 
 `unauthorized_head_does_not_leak_size` и GET без/со старым токеном→401 без Content-Range/размера; неверный Host→403 до чтения; path traversal→404; Origin не получает Allow-Origin; POST→405. Слишком большой заголовок (>8192 bytes)→431, не range parser. Redirects отсутствуют. Закрытая room запрещает выдачу даже с прежним локальным токеном.
 
-- [ ] **Step 2: RED.** `cargo test -p media-stream --test http_range --test http_security`.
-- [ ] **Step 3: Реализовать axum adapter и body.** Listener только 127.0.0.1:0, принимать Host без вариантов доменного имени. Авторизация раньше Range/HEAD metadata. При 416 сообщать размер только уже авторизованному клиенту; при mismatch source/room mediaId отклонять до I/O. Для transport-лимита использовать hyper http1 Builder с max_buf_size(8192) и axum Router через TowerToHyperService; отслеживать owned connection tasks. Численные лимиты читателей задачи4 применяются до открытия body (429). Нет trace middleware с токенами; временные имена файлов не выводятся в ошибках.
-- [ ] **Step 4: GREEN.** Два тестовых server инстанса имеют разные capability. Запрос capability первого ко второму→401. `cargo test --locked -p media-stream` выполняет все тесты, порты берутся динамически, ни один тест не зависит от порядка.
-- [ ] **Step 5: Commit.** `feat: add authenticated loopback range server`.
+- [x] **Step 2: RED.** `cargo test -p media-stream --test http_range --test http_security`.
+- [x] **Step 3: Реализовать axum adapter и body.** Listener только 127.0.0.1:0, принимать Host без вариантов доменного имени. Авторизация раньше Range/HEAD metadata. При 416 сообщать размер только уже авторизованному клиенту; при mismatch source/room mediaId отклонять до I/O. Для transport-лимита использовать hyper http1 Builder с max_buf_size(8192) и axum Router через TowerToHyperService; отслеживать owned connection tasks. Численные лимиты читателей задачи4 применяются до открытия body (429). Нет trace middleware с токенами; временные имена файлов не выводятся в ошибках.
+- [x] **Step 4: GREEN.** Два тестовых server инстанса имеют разные capability. Запрос capability первого ко второму→401. `cargo test --locked -p media-stream` выполняет все тесты, порты берутся динамически, ни один тест не зависит от порядка.
+- [x] **Step 5: Commit.** `feat: add authenticated loopback range server`.
 
 ### Task 6: Отзыв активного ответа, проверочный запуск и воспроизводимость
 
@@ -178,19 +178,20 @@ assert!(Speed::try_from(f64::NAN).is_err());
 
 **Interfaces:**
 - Consumes все публичные API предыдущих задач.
+- Дополнение по проверке lifecycle: `CreatedRoom.owner: RoomOwner` — локальная nonserializable close-only capability; `RoomOwner::close(self)` async отзывает комнату без проверки истёкшей host session. Сетевой `RoomHandle::close` сохраняет прежнюю авторизацию.
 - Produces `LocalRoomSession::start(file:&Path,duration_ms:u64,host_name:&str,clock:Arc<dyn Clock>)->Result<Self,StreamError>` и `shutdown(self)->Result<(),StreamError>`; владеет room, выбранным источником и loopback server. Сервер создаётся только после создания комнаты с descriptor выбранного файла.
 - Produces CLI `cargo run --locked -p media-stream --bin core-harness -- --file <path> --duration-ms <u64>`. Только локальный тестовый harness: создаёт room, открывает выбранный файл, запускает host loopback adapter; Ctrl+C → shutdown и close. В stdout только безопасные события `room-created`, `range-server-ready`, `room-closed`; секреты/путь/URL с секретом не печатаются. Capability тестовый harness передаёт только прямо создаваемому mpv-процессу на этапе B; сейчас реальные HTTP smoke выполняются Rust integration tests, не копированием токена из лога.
 - Produces local health probe через внутренний authenticated request в harness; `range-server-ready` выводится после корректного HEAD. Нулевой PID/открытый порт не считается readiness.
 
-- [ ] **Step 1: Написать детерминированные integration tests.** `kick_cancels_between_chunks` и `close_cancels_between_chunks`: управляемый body barrier после первого чанка, затем kick/close, следующий read/yield запрещён, server task завершена. Bytes, уже попавшие в socket buffer, не объявлять отозванными. `closing_drops_media_and_tasks`: shutdown.await возвращается только после завершения owned reader tasks; файл больше не удерживается владельцами комнаты. `old_media_cannot_serve_new_generation`: replace_media, старый URL/token отвергнут, новый требует новый adapter/capability. `slow_reader_has_bounded_queue`: paused consumer удерживает не более2 queued+1 active чанков, не читает фильм целиком; cancellation завершает producer. Проверять счётчики выделенных chunks тестовым instrumentation, а не нестабильный process RSS.
+- [x] **Step 1: Написать детерминированные integration tests.** `kick_cancels_between_chunks` и `close_cancels_between_chunks`: управляемый body barrier после первого чанка, затем kick/close, следующий read/yield запрещён, server task завершена. Bytes, уже попавшие в socket buffer, не объявлять отозванными. `closing_drops_media_and_tasks`: shutdown.await возвращается только после завершения owned reader tasks; файл больше не удерживается владельцами комнаты. `old_media_cannot_serve_new_generation`: replace_media, старый URL/token отвергнут, новый требует новый adapter/capability. `slow_reader_has_bounded_queue`: paused consumer удерживает не более2 queued+1 active чанков, не читает фильм целиком; cancellation завершает producer. Проверять счётчики выделенных chunks тестовым instrumentation, а не нестабильный process RSS.
 
 `room_to_http_workflow` создаёт host+guest с ManualClock: host-only запрещает гостю seek, everyone разрешает; после Play и +2000 ms snapshot соответствует проекции, поздний гость получает текущее состояние; HEAD/Range возвращают выбранные байты; guest kick прекращает доступ; host close заканчивает server. Это локальный integration test, не утверждение о синхронности настоящих декодеров.
 
-- [ ] **Step 2: RED.** `cargo test --locked -p media-stream --test revocation --test backpressure --test workflow`. Если найдены ошибки предыдущих задач, воспроизвести тестом перед исправлением; не подменять ожидания успешным stub.
-- [ ] **Step 3: Реализовать завершение и harness.** Barrier hooks и instrumentation только под тестовой feature. Составной owner `LocalRoomSession` в `media-stream/src/http.rs` управляет RoomHandle, source и LoopbackServer: `shutdown(self)` сначала отзывает room, отменяет readers, ожидает HTTP tasks, затем освобождает source. RoomHandle::close отзывает authority, но не владеет HTTP/файлами; именно LocalRoomSession гарантирует полный lifecycle. Установить таймаут ожидания2 s и возвращать явную ошибку при незавершённой задаче, не оставлять detached readers.
-- [ ] **Step 4: GREEN и CI.** Из корня: `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`; `cargo test --locked --workspace --all-features`; `cargo build --locked --workspace --all-targets`. CI запускает эти же команды; Linux обязателен, Windows/macOS core-test matrix проверяет переносимость Rust-ядра, не выдаётся за native UI-тест. Зафиксировать фактическое число tests passed/failed/skipped. Sparse/native ограничения объяснить отдельно.
-- [ ] **Step 5: Проверить повторяемый старт и сохранить инструкции среды.** Дважды запустить harness с сгенерированным временным fixture, дождаться authenticated HEAD readiness, штатно остановить каждый экземпляр; процесс не переживает рестарт среды. В `docs/development/core.md` записать PATH/CARGO_HOME/RUSTUP_HOME и точные команды. Через environment draft сохранить проверенный `install_script` (активация+setup+locked build) и `start_skill` (использовать существующий checkout, не worktree; команды tests/harness; readiness; никакого ожидания сохранённого процесса). Публикация и применение draft пользователем не считаются выполненными агентом.
-- [ ] **Step 6: Commit и передача в B/C.** `feat: verify core lifecycle and development workflow`. Отчёт перечисляет что проверено локально и какие native/network gates остаются. Не начинать произвольный UI вместо технических проверок.
+- [x] **Step 2: RED.** `cargo test --locked -p media-stream --test revocation --test backpressure --test workflow`. Если найдены ошибки предыдущих задач, воспроизвести тестом перед исправлением; не подменять ожидания успешным stub.
+- [x] **Step 3: Реализовать завершение и harness.** Barrier hooks и instrumentation только под тестовой feature. Составной owner `LocalRoomSession` в `media-stream/src/http.rs` управляет RoomHandle, source и LoopbackServer: `shutdown(self)` сначала отзывает room, отменяет readers, ожидает HTTP tasks, затем освобождает source. RoomHandle::close отзывает authority, но не владеет HTTP/файлами; именно LocalRoomSession гарантирует полный lifecycle. Установить таймаут ожидания2 s и возвращать явную ошибку при незавершённой задаче, не оставлять detached readers.
+- [x] **Step 4: GREEN и CI.** Из корня: `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`; `cargo test --locked --workspace --all-features`; `cargo build --locked --workspace --all-targets`. CI запускает эти же команды; Linux обязателен, Windows/macOS core-test matrix проверяет переносимость Rust-ядра, не выдаётся за native UI-тест. Зафиксировать фактическое число tests passed/failed/skipped. Sparse/native ограничения объяснить отдельно.
+- [x] **Step 5: Проверить повторяемый старт и сохранить инструкции среды.** Дважды запустить harness с сгенерированным временным fixture, дождаться authenticated HEAD readiness, штатно остановить каждый экземпляр; процесс не переживает рестарт среды. В `docs/development/core.md` записать PATH/CARGO_HOME/RUSTUP_HOME и точные команды. Через environment draft сохранить проверенный `install_script` (активация+setup+locked build) и `start_skill` (использовать существующий checkout, не worktree; команды tests/harness; readiness; никакого ожидания сохранённого процесса). Публикация и применение draft пользователем не считаются выполненными агентом.
+- [x] **Step 6: Commit и передача в B/C.** `feat: verify core lifecycle and development workflow`. Отчёт перечисляет что проверено локально и какие native/network gates остаются. Не начинать произвольный UI вместо технических проверок.
 
 ## Контроль зависимостей и выполнения
 
@@ -200,4 +201,4 @@ assert!(Speed::try_from(f64::NAN).is_err());
 
 ## Результат review плана
 
-Архитектура утверждена. Пользователь уже выбрал работу агентами; повторный выбор метода не нужен. Этот план и его конкретные API ещё должен просмотреть пользователь согласно Superpowers writing-plans. После подтверждения использовать `superpowers:subagent-driven-development`; изменения кода до него не начинаются. План не является результатом выполненных тестов.
+Архитектура и план подтверждены пользователем до реализации. Метод: агенты с ролями ECC и task review по Superpowers. Все шесть задач реализованы; [отчёт проверок и уточнений](../../development/core-validation.md) отделяет локальные результаты от ещё не выполненной native/network приёмки.
