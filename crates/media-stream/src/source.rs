@@ -23,6 +23,8 @@ use crate::{CHUNK_BYTES, MAX_READERS_PER_ROOM, MAX_READERS_PER_SESSION, StreamEr
 /// One trusted selection, opened once. No pathname is retained or reopened.
 /// All cursor operations share one mutex, including concurrent range readers.
 pub struct SelectedMedia {
+    #[cfg(feature = "test-support")]
+    pub(crate) probe: Option<Arc<crate::BodyProbe>>,
     file: Mutex<File>,
     media_id: MediaId,
     size: u64,
@@ -40,12 +42,20 @@ impl SelectedMedia {
             return Err(StreamError::NotRegularFile);
         }
         Ok(Self {
+            #[cfg(feature = "test-support")]
+            probe: None,
             file: Mutex::new(File::from_std(file)),
             media_id,
             size: metadata.len(),
             modified: metadata.modified()?,
             changed: AtomicBool::new(false),
         })
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn with_probe(mut self, probe: Arc<crate::BodyProbe>) -> Self {
+        self.probe = Some(probe);
+        self
     }
 
     pub fn descriptor(&self, duration_ms: u64) -> MediaDescriptor {
@@ -111,6 +121,19 @@ impl SelectedMedia {
         let seek = file.seek(SeekFrom::Start(offset)).await;
         self.check(permit)?;
         seek?;
+        #[cfg(feature = "test-support")]
+        let mut tracked = self.probe.as_ref().map(|probe| probe.chunk(len));
+        #[cfg(feature = "test-support")]
+        let mut fallback = if tracked.is_none() {
+            vec![0; len]
+        } else {
+            Vec::new()
+        };
+        #[cfg(feature = "test-support")]
+        let chunk = tracked
+            .as_mut()
+            .map_or(fallback.as_mut_slice(), |chunk| chunk.data.as_mut_slice());
+        #[cfg(not(feature = "test-support"))]
         let mut chunk = vec![0; len];
         let mut filled = 0;
         while filled < len {
@@ -127,6 +150,12 @@ impl SelectedMedia {
         let metadata = file.metadata().await;
         self.check(permit)?;
         self.check_metadata(metadata?)?;
+        #[cfg(feature = "test-support")]
+        return Ok(match tracked {
+            Some(chunk) => Bytes::from_owner(chunk),
+            None => Bytes::from(fallback),
+        });
+        #[cfg(not(feature = "test-support"))]
         Ok(Bytes::from(chunk))
     }
 }

@@ -181,3 +181,25 @@ async fn already_waiting_permits_wake_on_explicit_revocation() {
     closed.unwrap();
     assert_eq!(host_permit.check_active(), Err(RoomError::RoomClosed));
 }
+
+#[tokio::test]
+async fn expired_host_session_cannot_close_but_owner_can() {
+    let (c, clock) = setup();
+    clock.advance_ms(299_000);
+    let guest = c.room.join(&c.invitation, "late guest").await.unwrap();
+    let permit = c
+        .room
+        .authorize_media(&guest.session, guest.snapshot.media.media_id)
+        .await
+        .unwrap();
+    let mut receiver = c.room.subscribe(&guest.session).await.unwrap();
+    clock.advance_ms(2_000);
+    assert_eq!(
+        c.room.close(&c.host_session).await,
+        Err(RoomError::Unauthorized)
+    );
+    // Local ownership must remain usable after session TTL.
+    c.owner.close().await;
+    assert_eq!(permit.check_active(), Err(RoomError::RoomClosed));
+    assert!(receiver.changed().await.is_err());
+}

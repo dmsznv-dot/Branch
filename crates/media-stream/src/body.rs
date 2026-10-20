@@ -8,6 +8,10 @@ use tokio_util::sync::CancellationToken;
 use crate::{CHUNK_BYTES, ReaderLease, SelectedMedia, StreamError};
 
 struct Reader {
+    #[cfg(feature = "test-support")]
+    _probe_guard: Option<crate::test_support::BodyGuard>,
+    #[cfg(feature = "test-support")]
+    yielded: bool,
     source: Arc<SelectedMedia>,
     permit: MediaPermit,
     // Retained for this complete response stream, including between pulls.
@@ -27,6 +31,10 @@ pub(crate) fn media_body(
     len: u64,
 ) -> Body {
     let reader = Reader {
+        #[cfg(feature = "test-support")]
+        _probe_guard: source.probe.as_ref().map(|probe| probe.body()),
+        #[cfg(feature = "test-support")]
+        yielded: false,
         source,
         permit,
         _lease: lease,
@@ -41,6 +49,15 @@ pub(crate) fn media_body(
         reader.permit.check_active()?;
         if reader.stopped.is_cancelled() {
             return Err(cancelled());
+        }
+        #[cfg(feature = "test-support")]
+        if let Some(probe) = &reader.source.probe {
+            tokio::select! {
+                biased;
+                () = reader.stopped.cancelled() => return Err(cancelled()),
+                () = reader.permit.cancelled() => return Err(cancelled()),
+                () = probe.before_read(reader.yielded) => {},
+            }
         }
         let chunk = tokio::select! {
             biased;
@@ -59,6 +76,13 @@ pub(crate) fn media_body(
         }
         if chunk.is_empty() {
             return Err(StreamError::MediaChanged);
+        }
+        #[cfg(feature = "test-support")]
+        {
+            reader.yielded = true;
+            if let Some(probe) = &reader.source.probe {
+                probe.yielded();
+            }
         }
         reader.offset += chunk.len() as u64;
         reader.remaining -= chunk.len() as u64;

@@ -1,7 +1,9 @@
 use std::{
     fmt,
     net::{Ipv4Addr, SocketAddr},
+    path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use axum::{
@@ -14,14 +16,17 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hyper::server::conn::http1;
 use hyper_util::{rt::TokioIo, service::TowerToHyperService};
-use room_server::{MediaPermit, RoomHandle, SessionToken};
+use room_server::{InvitationToken, MediaPermit, RoomHandle, RoomOwner, SessionToken};
+use shared_protocol::MediaId;
 use subtle::ConstantTimeEq;
+use sync_engine::Clock;
 use tokio::{
-    net::TcpListener,
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
     sync::watch,
     task::{JoinHandle, JoinSet},
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     RangeError, ReaderLimits, SelectedMedia, StreamError, body::media_body, resolve_range,
@@ -74,6 +79,7 @@ struct ServerState {
     session: SessionToken,
     capability: LoopbackCapability,
     stopped: CancellationToken,
+    connections: TaskTracker,
 }
 
 #[derive(Clone)]
@@ -108,6 +114,7 @@ impl LoopbackServer {
             session,
             capability,
             stopped: CancellationToken::new(),
+            connections: TaskTracker::new(),
         });
         let task = tokio::spawn(serve(listener, state.clone()));
         Ok(Self {
@@ -127,17 +134,164 @@ impl LoopbackServer {
     /// Stops accepts, aborts and joins all owned connections, and drops their
     /// body leases. Bytes previously delivered to a client cannot be recalled.
     pub async fn shutdown(mut self) -> Result<(), StreamError> {
+        self.shutdown_by(tokio::time::Instant::now() + Duration::from_secs(2))
+            .await
+    }
+
+    async fn shutdown_by(&mut self, deadline: tokio::time::Instant) -> Result<(), StreamError> {
         self.state.stopped.cancel();
-        if let Some(task) = self.task.take() {
-            task.await
-                .map_err(|_| StreamError::Io(std::io::Error::other("loopback task failed")))??;
-        }
-        Ok(())
+        self.state.connections.close();
+        let result = if let Some(mut task) = self.task.take() {
+            match tokio::time::timeout_at(deadline, &mut task).await {
+                Ok(result) => result
+                    .map_err(|_| StreamError::Io(std::io::Error::other("loopback task failed")))
+                    .and_then(std::convert::identity),
+                Err(_) => {
+                    task.abort();
+                    // Join the aborted accept task; its JoinSet aborts every
+                    // connection. The tracker below also waits for those drops.
+                    let _ = task.await;
+                    Err(StreamError::ShutdownTimeout)
+                }
+            }
+        } else {
+            Ok(())
+        };
+        self.state.connections.wait().await;
+        result
     }
 }
 impl Drop for LoopbackServer {
     fn drop(&mut self) {
         self.state.stopped.cancel();
+    }
+}
+
+/// Owns the room, selected descriptor and all local HTTP tasks.
+/// Explicit shutdown revokes authority before joining readers and dropping media.
+pub struct LocalRoomSession {
+    room: RoomHandle,
+    owner: RoomOwner,
+    invitation: InvitationToken,
+    source: Arc<SelectedMedia>,
+    server: LoopbackServer,
+}
+impl LocalRoomSession {
+    pub async fn start(
+        file: &Path,
+        duration_ms: u64,
+        host_name: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, StreamError> {
+        let source = Arc::new(SelectedMedia::open(file, MediaId::new())?);
+        Self::start_source(source, duration_ms, host_name, clock).await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub async fn start_with_probe(
+        file: &Path,
+        duration_ms: u64,
+        host_name: &str,
+        clock: Arc<dyn Clock>,
+        probe: Arc<crate::BodyProbe>,
+    ) -> Result<Self, StreamError> {
+        let source = Arc::new(SelectedMedia::open(file, MediaId::new())?.with_probe(probe));
+        Self::start_source(source, duration_ms, host_name, clock).await
+    }
+
+    async fn start_source(
+        source: Arc<SelectedMedia>,
+        duration_ms: u64,
+        host_name: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, StreamError> {
+        let created = RoomHandle::create(source.descriptor(duration_ms), host_name, clock)?;
+        let server =
+            match LoopbackServer::start(source.clone(), created.room.clone(), created.host_session)
+                .await
+            {
+                Ok(server) => server,
+                Err(error) => {
+                    created.owner.close().await;
+                    return Err(error);
+                }
+            };
+        Ok(Self {
+            room: created.room,
+            owner: created.owner,
+            invitation: created.invitation,
+            source,
+            server,
+        })
+    }
+    pub fn room(&self) -> &RoomHandle {
+        &self.room
+    }
+    pub fn invitation(&self) -> &InvitationToken {
+        &self.invitation
+    }
+    pub fn server(&self) -> &LoopbackServer {
+        &self.server
+    }
+    #[cfg(feature = "test-support")]
+    pub fn source_weak(&self) -> std::sync::Weak<SelectedMedia> {
+        Arc::downgrade(&self.source)
+    }
+
+    /// A bounded authenticated HEAD over the real HTTP parser and listener.
+    pub async fn check_ready(&self) -> Result<(), StreamError> {
+        let check = async {
+            let address = self.server.address();
+            let mut stream = TcpStream::connect(address).await?;
+            let request = format!(
+                "HEAD /media/{} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                self.source.descriptor(0).media_id,
+                self.server.capability().expose()
+            );
+            stream.write_all(request.as_bytes()).await?;
+            let mut response = Vec::new();
+            // A hostile or broken adapter cannot turn a health check into an
+            // unbounded read. HEAD must have headers only and exact metadata.
+            stream.take(8193).read_to_end(&mut response).await?;
+            let text = std::str::from_utf8(&response).map_err(|_| StreamError::ReadinessFailed)?;
+            let Some(headers) = text.strip_suffix("\r\n\r\n") else {
+                return Err(StreamError::ReadinessFailed);
+            };
+            let mut lines = headers.split("\r\n");
+            if lines.next() != Some("HTTP/1.1 200 OK") || response.len() > 8192 {
+                return Err(StreamError::ReadinessFailed);
+            }
+            let expected = self.source.descriptor(0).size_bytes.get().to_string();
+            if !lines.any(|line| {
+                line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length") && value.trim() == expected
+                })
+            }) {
+                return Err(StreamError::ReadinessFailed);
+            }
+            Ok(())
+        };
+        tokio::time::timeout(Duration::from_secs(2), check)
+            .await
+            .map_err(|_| StreamError::ReadinessFailed)?
+    }
+
+    pub async fn shutdown(self) -> Result<(), StreamError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let Self {
+            owner,
+            mut server,
+            source,
+            ..
+        } = self;
+        let closed = tokio::time::timeout_at(deadline, owner.close()).await;
+        let stopped = server.shutdown_by(deadline).await;
+        drop(server);
+        drop(source);
+        if closed.is_err() {
+            return Err(StreamError::ShutdownTimeout);
+        }
+        stopped
     }
 }
 
@@ -154,7 +308,7 @@ async fn serve(listener: TcpListener, state: Arc<ServerState>) -> Result<(), Str
                 let router = Router::new().fallback(handle).with_state(ConnectionState { server: state.clone(), permission });
                 let service = TowerToHyperService::new(router);
                 let stopped = state.stopped.clone();
-                connections.spawn(async move {
+                connections.spawn(state.connections.track_future(async move {
                     let mut builder = http1::Builder::new();
                     // Hyper enforces this while parsing, before the adapter.
                     builder.max_buf_size(8192);
@@ -166,7 +320,7 @@ async fn serve(listener: TcpListener, state: Arc<ServerState>) -> Result<(), Str
                         // Never log a protocol error: it may contain input.
                         _ = connection => {},
                     }
-                });
+                }));
             }
         }
     };
@@ -335,5 +489,48 @@ mod tests {
         );
         created.room.close(&created.host_session).await.unwrap();
         assert!(std::future::poll_fn(|cx| Poll::Ready(watcher.as_mut().poll(cx).is_ready())).await);
+    }
+    #[tokio::test]
+    async fn expired_shutdown_deadline_aborts_and_joins_owned_tasks() {
+        let media_id = MediaId::new();
+        let path = std::env::temp_dir().join(format!("shutdown-deadline-{media_id}"));
+        std::fs::write(&path, b"selected").unwrap();
+        let source = Arc::new(SelectedMedia::open(&path, media_id).unwrap());
+        let clock = Arc::new(ManualClock::new(HostTime {
+            epoch: ClockEpochId::new(),
+            ticks_ms: WireU64::new(0),
+        }));
+        let created = RoomHandle::create(source.descriptor(0), "host", clock).unwrap();
+        let mut server = LoopbackServer::start(source.clone(), created.room, created.host_session)
+            .await
+            .unwrap();
+        server.state.stopped.cancel();
+        server.task.take().unwrap().await.unwrap().unwrap();
+        let tracker = server.state.connections.clone();
+        let weak = Arc::downgrade(&source);
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        // Substitute a stalled accept task which owns a tracked connection.
+        // The expired deadline must abort it, then join its child teardown.
+        server.task = Some(tokio::spawn(async move {
+            let mut children = JoinSet::new();
+            children.spawn(tracker.track_future(async move {
+                let _owned_source = source;
+                entered.send(()).unwrap();
+                std::future::pending::<()>().await;
+            }));
+            std::future::pending::<Result<(), StreamError>>().await
+        }));
+        ready.await.unwrap();
+        assert!(matches!(
+            server.shutdown_by(tokio::time::Instant::now()).await,
+            Err(StreamError::ShutdownTimeout)
+        ));
+        assert!(server.state.connections.is_empty());
+        drop(server);
+        assert!(
+            weak.upgrade().is_none(),
+            "shutdown detached a child retaining media"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 }

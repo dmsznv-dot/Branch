@@ -16,7 +16,22 @@ use crate::{
     },
 };
 
+/// Local close-only authority. Minted only by room creation; never serialized.
+/// Dropping it has no effect, and it cannot authorize other operations.
+pub struct RoomOwner {
+    room: RoomHandle,
+}
+impl RoomOwner {
+    pub async fn close(self) {
+        // Revoke before awaiting the authority mutex, even after clock/session expiry.
+        self.room.clock.closed.cancel();
+        let mut state = self.room.state.lock().await;
+        state.revoke();
+    }
+}
+
 pub struct CreatedRoom {
+    pub owner: RoomOwner,
     pub room: RoomHandle,
     pub host_id: ParticipantId,
     pub host_session: SessionToken,
@@ -67,6 +82,14 @@ struct State {
     media_cancelled: Arc<Revocation>,
 }
 impl State {
+    fn revoke(&mut self) {
+        self.media_cancelled.cancel();
+        for actor in &self.sessions {
+            actor.active.cancelled.cancel();
+        }
+        self.sessions.clear();
+        self.invitation = None;
+    }
     fn authenticate(&mut self, token: &SessionToken, now: HostTime) -> Result<usize, RoomError> {
         self.prune(now);
         let digest = token.digest();
@@ -135,11 +158,13 @@ impl RoomHandle {
             joins: FixedWindow::default(),
             media_cancelled: Arc::new(Revocation::new()),
         };
+        let room = Self {
+            state: Arc::new(Mutex::new(state)),
+            clock,
+        };
         Ok(CreatedRoom {
-            room: Self {
-                state: Arc::new(Mutex::new(state)),
-                clock,
-            },
+            owner: RoomOwner { room: room.clone() },
+            room,
             host_id,
             host_session,
             invitation,
@@ -306,12 +331,7 @@ impl RoomHandle {
         let now = self.clock.now()?;
         state.host(session, now)?;
         self.clock.closed.cancel();
-        state.media_cancelled.cancel();
-        for actor in &state.sessions {
-            actor.active.cancelled.cancel();
-        }
-        state.sessions.clear();
-        state.invitation = None;
+        state.revoke();
         Ok(())
     }
     pub async fn authorize_media(

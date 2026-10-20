@@ -5,7 +5,12 @@ mod body;
 mod http;
 mod range;
 mod source;
-pub use http::{LoopbackCapability, LoopbackServer};
+pub use http::{LocalRoomSession, LoopbackCapability, LoopbackServer};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support;
+#[cfg(feature = "test-support")]
+pub use test_support::BodyProbe;
 
 pub use range::{ByteRange, RangeError, resolve_range};
 pub use source::{ReaderLease, ReaderLimits, SelectedMedia};
@@ -22,6 +27,8 @@ pub enum StreamError {
     InvalidOffset,
     ReaderLimit,
     NotRegularFile,
+    ShutdownTimeout,
+    ReadinessFailed,
 }
 
 impl std::fmt::Display for StreamError {
@@ -32,6 +39,8 @@ impl std::fmt::Display for StreamError {
             Self::MediaChanged => "selected media changed",
             Self::InvalidOffset => "offset outside selected media",
             Self::ReaderLimit => "active reader limit reached",
+            Self::ShutdownTimeout => "local shutdown exceeded two seconds",
+            Self::ReadinessFailed => "authenticated loopback readiness failed",
             Self::NotRegularFile => "selected media is not a regular file",
         })
     }

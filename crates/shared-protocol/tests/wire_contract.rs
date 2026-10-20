@@ -172,7 +172,7 @@ fn uuid_newtypes_are_v4_strings() {
 #[test]
 fn room_snapshot_roundtrip_preserves_types_and_values() {
     let state = snapshot();
-    let wire = serde_json::to_value(&state).unwrap();
+    let wire = serde_json::to_value(state).unwrap();
     assert_eq!(wire["media"]["sizeBytes"], "18446744073709551615");
     assert_eq!(wire["media"]["durationMs"], "9007199254740993");
     assert_eq!(wire["playback"]["positionMs"], "73000");
@@ -203,7 +203,7 @@ fn actions_have_strict_tagged_contracts() {
             json!({"type": "setSpeed", "speed": 0.75}),
         ),
     ] {
-        assert_eq!(serde_json::to_value(&action).unwrap(), wire);
+        assert_eq!(serde_json::to_value(action).unwrap(), wire);
         let mut command = envelope();
         command.action = action;
         roundtrip(command);

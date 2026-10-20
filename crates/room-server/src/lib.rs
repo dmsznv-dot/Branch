@@ -7,7 +7,7 @@ mod limits;
 mod room;
 mod sessions;
 
-pub use room::{CreatedRoom, JoinedRoom, RoomHandle};
+pub use room::{CreatedRoom, JoinedRoom, RoomHandle, RoomOwner};
 pub use sessions::{InvitationToken, MediaPermit, SessionToken};
 
 /// Public failures contain no token material.
