@@ -4,6 +4,9 @@ An in-memory room authority, deterministic playback synchronization and a local
 adapter that streams original bytes from one explicitly selected file. Rooms
 support five participants and `everyone` / `host-only` playback controls.
 
+For managed-cloud setup, run `./scripts/setup-core.sh`, then activate the
+workspace-local toolchain as shown in [core development](docs/development/core.md).
+
 ```sh
 cargo test --locked --workspace --all-features
 cargo run --locked -p media-stream --bin core-harness -- --file /path/to/selected.mp4 --duration-ms 120000

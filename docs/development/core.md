@@ -16,7 +16,12 @@ rustup component add --toolchain 1.99.1 rustfmt clippy
 cargo build --locked --workspace --all-targets
 ```
 
-For an empty toolchain store, install the pinned release with
+For Linux x86_64 cloud bootstrap or refresh (including a missing rustup binary),
+run `./scripts/setup-core.sh` from the checkout, then activate the variables above.
+The script verifies the official installer checksum over verified HTTPS and does
+not edit shell profiles.
+
+For an existing rustup installation with an empty toolchain store, install the pinned release with
 `rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy`.
 Keep the managed HTTPS proxy and CA environment intact. Cargo verifies package
 checksums; rustup retains its signature and checksum checks. No application

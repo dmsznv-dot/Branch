@@ -6,7 +6,7 @@
 
 **Architecture:** Четыре независимых от UI crate: shared-protocol → sync-engine → room-server; media-stream использует их публичные контракты. RoomServer проверяет сессию и права, выдаёт отзываемый MediaPermit; HTTP-адаптер проверяет локальную capability и разрешение до чтения и перед каждым отправляемым чанком. Время задаётся явно и не зависит от системной даты.
 
-**Tech Stack:** Rust 1.99.1, edition 2024; Tokio 1, axum =0.8.9, hyper 1/server/http1 и hyper-util 0.1/tokio/service, serde 1/serde_json 1, uuid 1, bytes 1, tokio-util 0.7, getrandom 0.4, arc-swap 1, sha2 0.10, subtle 2, base64 0.22, thiserror 2. Dev: reqwest 0.12 с rustls, tempfile 3, futures-util 0.3. Cargo.lock фиксируется в первой задаче. Прямые зависимости добавляются только использующим их crate.
+**Tech Stack:** Rust 1.99.1, edition 2024; Tokio 1, axum 0.8 (Cargo.lock: 0.8.9), hyper 1/server/http1 и hyper-util 0.1/tokio/service, serde 1/serde_json 1, uuid 1, bytes 1, tokio-util 0.7, getrandom 0.4, arc-swap 1, sha2 0.10, subtle 2, base64 0.22, thiserror 2. Dev: reqwest 0.12 с rustls, tempfile 3, futures-util 0.3. Cargo.lock фиксируется в первой задаче. Прямые зависимости добавляются только использующим их crate.
 
 **Spec:** [Утверждённая архитектура](../specs/2026-10-20-watch-together-design.md), [карта подпроектов и покрытия](2026-10-20-prototype-roadmap.md).
 
@@ -160,6 +160,7 @@ assert!(Speed::try_from(f64::NAN).is_err());
 
 **Interfaces:**
 - Produces `LoopbackCapability` (отдельный секрет 32 bytes); `LoopbackServer::start(source:Arc<SelectedMedia>, room:RoomHandle, session:SessionToken)->Result<Self,StreamError>`, `address()->SocketAddr`, `capability()->&LoopbackCapability`, `shutdown(self)->Result<(),StreamError>`.
+- Дополнение итогового review: максимум 16 HTTP-соединений на адаптер до per-connection allocations; TokioTimer и header-read timeout 5 s, без таймаута тела медиа.
 - Endpoint только `/media/{mediaId}`, методы GET/HEAD. Авторизация: точный `Host=127.0.0.1:<assigned-port>`, `Authorization: Bearer <local capability>`, активная session и mediaId. SessionToken хранится в сервере, не передаётся в URL. capability не равна InvitationToken/SessionToken. Другие маршруты→404 без файлового API.
 - Body: pull-driven stream, очередь максимум два чанка на запрос. Перед чтением и перед yield проверяются permit и отмена; источники/сессии не клонируются с расширением прав.
 
