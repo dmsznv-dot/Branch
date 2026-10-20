@@ -1,0 +1,15 @@
+[package]
+name = "media-stream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes = "1"
+room-server = { path = "../room-server" }
+shared-protocol = { path = "../shared-protocol" }
+tokio = { version = "1", features = ["fs", "io-util", "sync", "macros", "rt"] }
+
+[dev-dependencies]
+sync-engine = { path = "../sync-engine", features = ["test-support"] }

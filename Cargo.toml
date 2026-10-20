@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/shared-protocol", "crates/sync-engine", "crates/room-server"]
+members = ["crates/shared-protocol", "crates/sync-engine", "crates/room-server", "crates/media-stream"]
 resolver = "3"
 
 [workspace.package]
