@@ -1,8 +1,11 @@
 //! Original bytes from one explicitly selected file descriptor.
 //! Transports must retain a [`ReaderLease`] for the entire response body and
 //! observe the media permit's cancellation signal while transmitting it.
+mod body;
+mod http;
 mod range;
 mod source;
+pub use http::{LoopbackCapability, LoopbackServer};
 
 pub use range::{ByteRange, RangeError, resolve_range};
 pub use source::{ReaderLease, ReaderLimits, SelectedMedia};
