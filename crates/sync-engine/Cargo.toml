@@ -1,0 +1,12 @@
+[package]
+name = "sync-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+shared-protocol = { path = "../shared-protocol" }

@@ -190,6 +190,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync-engine"
+version = "0.1.0"
+dependencies = [
+ "shared-protocol",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
