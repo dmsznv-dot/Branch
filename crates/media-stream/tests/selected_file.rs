@@ -108,10 +108,13 @@ fn open_rejects_missing_paths_and_directories() {
         SelectedMedia::open(&fixture.path.with_extension("missing"), MediaId::new()),
         Err(StreamError::Io(_))
     ));
-    assert!(matches!(
-        SelectedMedia::open(&fixture.dir, MediaId::new()),
-        Err(StreamError::NotRegularFile)
-    ));
+    let directory = SelectedMedia::open(&fixture.dir, MediaId::new());
+    // Windows can reject the directory in File::open, before the opened
+    // descriptor's regular-file check. Both paths must reject the selection.
+    assert!(
+        matches!(directory, Err(StreamError::NotRegularFile))
+            || (cfg!(windows) && matches!(directory, Err(StreamError::Io(_))))
+    );
 }
 
 #[cfg(unix)]

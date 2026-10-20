@@ -47,6 +47,13 @@ verify that later reads and yields are suppressed. Already delivered socket
 bytes cannot be recalled. Separate pull-consumer tests check that holding one
 chunk allocates one chunk, rather than reading the entire selected file.
 
+Each loopback server admits at most 16 connections, before allocating HTTP
+routers, watch channels or connection tasks. Excess sockets close immediately;
+slots return when connections close, fail, time out or shut down. A configured
+Tokio timer gives HTTP headers a five-second read deadline, including idle and
+partial unauthenticated requests. This deadline does not limit media-body
+duration; the existing reader quotas and revocation still govern those bodies.
+
 `RoomHandle::close` authenticates the host session. `CreatedRoom.owner` is a
 nonserializable, room-bound, close-only capability for local lifecycle ownership;
 it remains usable after host session expiry. Dropping legacy `CreatedRoom`

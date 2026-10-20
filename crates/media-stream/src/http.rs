@@ -15,7 +15,10 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hyper::server::conn::http1;
-use hyper_util::{rt::TokioIo, service::TowerToHyperService};
+use hyper_util::{
+    rt::{TokioIo, TokioTimer},
+    service::TowerToHyperService,
+};
 use room_server::{InvitationToken, MediaPermit, RoomHandle, RoomOwner, SessionToken};
 use shared_protocol::MediaId;
 use subtle::ConstantTimeEq;
@@ -23,7 +26,7 @@ use sync_engine::Clock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::watch,
+    sync::{Semaphore, watch},
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -31,6 +34,9 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     RangeError, ReaderLimits, SelectedMedia, StreamError, body::media_body, resolve_range,
 };
+
+const MAX_CONNECTIONS: usize = 16;
+const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Separate 32-byte OS-random local capability, never placed in a URL or log.
 /// Secret-bearing serialization and formatting are deliberately absent.
@@ -92,6 +98,7 @@ struct ConnectionState {
 
 /// A loopback-only original-byte adapter. Its accept task owns every connection;
 /// response readers are polled in those tasks and never spawned independently.
+/// At most 16 connections are admitted, with a 5-second HTTP header deadline.
 pub struct LoopbackServer {
     address: SocketAddr,
     state: Arc<ServerState>,
@@ -297,6 +304,7 @@ impl LocalRoomSession {
 
 async fn serve(listener: TcpListener, state: Arc<ServerState>) -> Result<(), StreamError> {
     let mut connections = JoinSet::new();
+    let admission = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let result = loop {
         tokio::select! {
             biased;
@@ -304,14 +312,24 @@ async fn serve(listener: TcpListener, state: Arc<ServerState>) -> Result<(), Str
             Some(_) = connections.join_next(), if !connections.is_empty() => {},
             accepted = listener.accept() => {
                 let (stream, _) = match accepted { Ok(value) => value, Err(error) => break Err(error.into()) };
+                // Reject before allocating any per-connection channel/router
+                // or spawning work. The owned slot lives through all HTTP I/O.
+                let Ok(slot) = admission.clone().try_acquire_owned() else {
+                    drop(stream);
+                    continue;
+                };
                 let (permission, receiver) = watch::channel(None);
                 let router = Router::new().fallback(handle).with_state(ConnectionState { server: state.clone(), permission });
                 let service = TowerToHyperService::new(router);
                 let stopped = state.stopped.clone();
                 connections.spawn(state.connections.track_future(async move {
+                    let _slot = slot;
                     let mut builder = http1::Builder::new();
                     // Hyper enforces this while parsing, before the adapter.
-                    builder.max_buf_size(8192);
+                    builder
+                        .timer(TokioTimer::new())
+                        .header_read_timeout(HEADER_READ_TIMEOUT)
+                        .max_buf_size(8192);
                     let connection = builder.serve_connection(TokioIo::new(stream), service);
                     tokio::select! {
                         biased;
@@ -456,8 +474,133 @@ async fn reader_revoked(mut permission: watch::Receiver<Option<MediaPermit>>) {
 mod tests {
     use super::*;
     use shared_protocol::{ClockEpochId, HostTime, MediaDescriptor, MediaId, WireU64};
-    use std::{future::Future, task::Poll};
+    use std::{future::Future, path::PathBuf, task::Poll};
     use sync_engine::ManualClock;
+
+    struct ConnectionFixture(PathBuf);
+    impl ConnectionFixture {
+        async fn start() -> (Self, LoopbackServer) {
+            let id = MediaId::new();
+            let path = std::env::temp_dir().join(format!("connection-admission-{id}"));
+            std::fs::write(&path, b"selected").unwrap();
+            let source = Arc::new(SelectedMedia::open(&path, id).unwrap());
+            let clock = Arc::new(ManualClock::new(HostTime {
+                epoch: ClockEpochId::new(),
+                ticks_ms: WireU64::new(0),
+            }));
+            let created = RoomHandle::create(source.descriptor(0), "host", clock).unwrap();
+            let server = LoopbackServer::start(source, created.room, created.host_session)
+                .await
+                .unwrap();
+            (Self(path), server)
+        }
+    }
+    impl Drop for ConnectionFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    async fn wait_connections(server: &LoopbackServer, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while server.state.connections.len() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connection tasks did not reach the expected count");
+    }
+
+    async fn authenticated_get(server: &LoopbackServer) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut stream = TcpStream::connect(server.address()).await.unwrap();
+            let request = format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                server.state.path, server.address(), server.capability().expose()
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+            assert!(response.ends_with(b"\r\n\r\nselected"));
+        })
+        .await
+        .expect("authenticated request did not resume");
+    }
+
+    #[tokio::test]
+    async fn connection_admission_caps_partial_headers_and_reclaims_close_and_error_slots() {
+        let (_fixture, server) = ConnectionFixture::start().await;
+        let mut held = Vec::new();
+        for _ in 0..16 {
+            let mut stream = TcpStream::connect(server.address()).await.unwrap();
+            stream.write_all(b"GET /media/").await.unwrap();
+            held.push(stream);
+        }
+        wait_connections(&server, 16).await;
+        for _ in 0..3 {
+            let mut excess = TcpStream::connect(server.address()).await.unwrap();
+            let mut byte = [0];
+            let result = tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte))
+                .await
+                .expect("excess socket was retained instead of rejected");
+            assert!(matches!(result, Ok(0) | Err(_)));
+            assert_eq!(server.state.connections.len(), 16);
+        }
+        drop(held.pop());
+        wait_connections(&server, 15).await;
+        authenticated_get(&server).await;
+        wait_connections(&server, 15).await;
+
+        // Finish one admitted request with an invalid request line, forcing
+        // Hyper's protocol-error exit rather than a client-close exit.
+        let mut malformed = held.pop().unwrap();
+        malformed.write_all(b"\0\r\n\r\n").await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), malformed.read_to_end(&mut response))
+            .await
+            .expect("malformed request did not close")
+            .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
+        wait_connections(&server, 14).await;
+        authenticated_get(&server).await;
+        let tracker = server.state.connections.clone();
+        server.shutdown().await.unwrap();
+        assert!(tracker.is_empty());
+    }
+
+    #[tokio::test]
+    async fn connection_header_timeout_closes_idle_and_partial_requests_and_reclaims_slots() {
+        let (_fixture, server) = ConnectionFixture::start().await;
+        let started = tokio::time::Instant::now();
+        let mut held = Vec::new();
+        for index in 0..16 {
+            let mut stream = TcpStream::connect(server.address()).await.unwrap();
+            if index % 2 == 0 {
+                stream.write_all(b"GET /media/").await.unwrap();
+            }
+            held.push(stream);
+        }
+        wait_connections(&server, 16).await;
+        // Await observable EOF with a failure bound, never sleep to guess
+        // when the parser or timer has run. Exercise the production 5s timer.
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for mut stream in held {
+                let mut response = Vec::new();
+                stream.read_to_end(&mut response).await.unwrap();
+                assert!(
+                    response.is_empty(),
+                    "incomplete headers revealed a response"
+                );
+            }
+        })
+        .await
+        .expect("idle/partial headers were not closed by the header timer");
+        assert!(started.elapsed() >= Duration::from_secs(5));
+        wait_connections(&server, 0).await;
+        authenticated_get(&server).await;
+        server.shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn connection_watcher_wakes_on_revocation_without_a_body_pull() {
