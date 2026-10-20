@@ -22,3 +22,5 @@ validation commands and acceptance limits. WebRTC/TURN transport, native
 libmpv/Tauri integration and distribution bundles belong to follow-up projects
 B/C/D. The current tests do not establish native playback or a real-network
 synchronization result of ≤250 ms.
+
+The next development slice is the [native player proof plan (B1)](docs/superpowers/plans/2026-10-21-native-player-proof.md), prepared for review. It covers the embedded window, decoder lifecycle and early target-OS bundle checks. Native implementation has not started.
