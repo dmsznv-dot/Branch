@@ -6,9 +6,10 @@ use std::{
     },
 };
 
+use arc_swap::ArcSwapOption;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
-use shared_protocol::{ClockEpochId, HostTime, MediaId, ParticipantId, RoomId};
+use shared_protocol::{ClockEpochId, HostTime, MediaId, ParticipantId, RoomId, WireU64};
 use subtle::ConstantTimeEq;
 use sync_engine::Clock;
 use tokio_util::sync::CancellationToken;
@@ -107,54 +108,115 @@ impl RoomClock {
         if self.closed.is_cancelled() {
             return Err(RoomError::RoomClosed);
         }
+        // Only a high-water mark observed before sampling can establish a
+        // genuine regression. Another caller may publish a newer tick while
+        // this sample is in flight; completion order is not clock order.
+        let before = self.last.load(Ordering::SeqCst);
         let now = self.clock.now();
-        if now.epoch != self.epoch {
+        if now.epoch != self.epoch || now.ticks_ms.get() < before {
             return Err(RoomError::ClockMismatch);
         }
-        self.last
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
-                (now.ticks_ms.get() >= last).then_some(now.ticks_ms.get())
-            })
-            .map_err(|_| RoomError::ClockMismatch)?;
-        Ok(now)
+        let published = self.last.fetch_max(now.ticks_ms.get(), Ordering::SeqCst);
+        Ok(HostTime {
+            ticks_ms: WireU64::new(now.ticks_ms.get().max(published)),
+            ..now
+        })
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TransitionHook(std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>);
+#[cfg(test)]
+impl TransitionHook {
+    fn run(&self) {
+        let hook = self.0.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 }
 
 pub(crate) struct SessionState {
     pub(crate) cancelled: Revocation,
-    last_activity: AtomicU64,
+    // None is terminal expiry; every Some record is immutable and has its own
+    // identity, so a stale expiry CAS cannot revoke a successful renewal.
+    last_activity: ArcSwapOption<u64>,
+    #[cfg(test)]
+    before_expiry_commit: TransitionHook,
+    #[cfg(test)]
+    before_renewal_commit: TransitionHook,
 }
 impl SessionState {
     pub(crate) fn new(now: u64) -> Self {
         Self {
             cancelled: Revocation::new(),
-            last_activity: AtomicU64::new(now),
+            last_activity: ArcSwapOption::from_pointee(now),
+            #[cfg(test)]
+            before_expiry_commit: TransitionHook::default(),
+            #[cfg(test)]
+            before_renewal_commit: TransitionHook::default(),
         }
+    }
+    fn replace_activity(&self, observed: &Arc<u64>, next: Option<Arc<u64>>) -> bool {
+        self.last_activity
+            .compare_and_swap(observed, next)
+            .as_ref()
+            .is_some_and(|previous| Arc::ptr_eq(previous, observed))
     }
     pub(crate) fn touch(&self, now: u64) -> Result<(), RoomError> {
-        if self.cancelled.is_cancelled() {
-            return Err(RoomError::Unauthorized);
-        }
-        self.last_activity
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
-                (now.saturating_sub(last) <= SESSION_TTL_MS).then_some(now.max(last))
-            })
-            .map_err(|_| {
+        loop {
+            if self.cancelled.is_cancelled() {
+                return Err(RoomError::Unauthorized);
+            }
+            let Some(last) = self.last_activity.load_full() else {
                 self.cancelled.cancel();
-                RoomError::Unauthorized
-            })?;
-        if self.cancelled.is_cancelled() {
-            return Err(RoomError::Unauthorized);
+                return Err(RoomError::Unauthorized);
+            };
+            let expired = now.saturating_sub(*last) > SESSION_TTL_MS;
+            #[cfg(test)]
+            if expired {
+                self.before_expiry_commit.run();
+            } else {
+                self.before_renewal_commit.run();
+            }
+            let next = (!expired).then(|| Arc::new(now.max(*last)));
+            // Holding the observed Arc prevents address reuse while this CAS
+            // competes with a renewal or terminal expiry transition.
+            if !self.replace_activity(&last, next) {
+                continue;
+            }
+            if expired {
+                self.cancelled.cancel();
+                return Err(RoomError::Unauthorized);
+            }
+            if self.cancelled.is_cancelled() {
+                return Err(RoomError::Unauthorized);
+            }
+            return Ok(());
         }
-        Ok(())
     }
     pub(crate) fn expire(&self, now: u64) -> bool {
-        let expired =
-            now.saturating_sub(self.last_activity.load(Ordering::SeqCst)) > SESSION_TTL_MS;
-        if expired {
-            self.cancelled.cancel();
+        loop {
+            if self.cancelled.is_cancelled() {
+                return true;
+            }
+            let Some(last) = self.last_activity.load_full() else {
+                self.cancelled.cancel();
+                return true;
+            };
+            if now.saturating_sub(*last) <= SESSION_TTL_MS {
+                return false;
+            }
+            #[cfg(test)]
+            self.before_expiry_commit.run();
+            if self.replace_activity(&last, None) {
+                self.cancelled.cancel();
+                return true;
+            }
+            // A concurrent successful read changed the activity generation;
+            // decide again instead of cancelling from the stale timestamp.
         }
-        self.cancelled.is_cancelled()
     }
 }
 
@@ -204,5 +266,69 @@ impl MediaPermit {
             () = self.session.cancelled.cancelled() => {},
             () = self.media_cancelled.cancelled() => {},
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::Barrier, thread};
+
+    fn pause(hook: &TransitionHook) -> (Arc<Barrier>, Arc<Barrier>) {
+        let entered = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        let (entered_hook, resume_hook) = (entered.clone(), resume.clone());
+        *hook.0.lock().unwrap() = Some(Box::new(move || {
+            entered_hook.wait();
+            resume_hook.wait();
+        }));
+        (entered, resume)
+    }
+
+    fn renew_while_expiry_is_pending(expired_touch: bool) {
+        let session = SessionState::new(0);
+        let (entered, resume) = pause(&session.before_expiry_commit);
+        thread::scope(|scope| {
+            let attempt = scope.spawn(|| {
+                if expired_touch {
+                    session.touch(300_001).map(|()| false)
+                } else {
+                    Ok(session.expire(300_001))
+                }
+            });
+            entered.wait();
+            let renewal = session.touch(300_000);
+            resume.wait();
+            let expiry = attempt.join().unwrap();
+            assert_eq!(renewal, Ok(()));
+            assert_eq!(expiry, Ok(false));
+        });
+        assert!(!session.cancelled.is_cancelled());
+        assert_eq!(session.touch(300_001), Ok(()));
+    }
+
+    #[test]
+    fn renewal_wins_against_stale_prune_expiry() {
+        renew_while_expiry_is_pending(false);
+    }
+
+    #[test]
+    fn renewal_wins_against_stale_touch_expiry() {
+        renew_while_expiry_is_pending(true);
+    }
+
+    #[test]
+    fn committed_expiry_prevents_pending_renewal_from_succeeding() {
+        let session = SessionState::new(0);
+        let (entered, resume) = pause(&session.before_renewal_commit);
+        thread::scope(|scope| {
+            let renewal = scope.spawn(|| session.touch(300_000));
+            entered.wait();
+            let expired = session.expire(300_001);
+            resume.wait();
+            assert!(expired);
+            assert_eq!(renewal.join().unwrap(), Err(RoomError::Unauthorized));
+        });
+        assert!(session.cancelled.is_cancelled());
     }
 }

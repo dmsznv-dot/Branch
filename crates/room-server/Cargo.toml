@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+arc-swap = "1"
 shared-protocol = { path = "../shared-protocol" }
 sync-engine = { path = "../sync-engine" }
 tokio = { version = "1", features = ["sync", "macros", "rt"] }

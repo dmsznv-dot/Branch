@@ -125,3 +125,82 @@ async fn host_only_lifecycle_methods_reject_guest() {
         Err(RoomError::InvalidInput)
     );
 }
+
+#[test]
+fn overlapping_permit_clock_samples_are_not_false_clock_regressions() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
+    };
+    use sync_engine::Clock;
+
+    struct OverlappingClock {
+        epoch: ClockEpochId,
+        other_epoch: ClockEpochId,
+        switch_epoch: AtomicBool,
+        ticks: AtomicU64,
+        pause_next: AtomicBool,
+        sampled: mpsc::Sender<()>,
+        resume: Mutex<mpsc::Receiver<()>>,
+    }
+    impl Clock for OverlappingClock {
+        fn now(&self) -> HostTime {
+            let sample = HostTime {
+                epoch: if self.switch_epoch.load(Ordering::SeqCst) {
+                    self.other_epoch
+                } else {
+                    self.epoch
+                },
+                ticks_ms: WireU64::new(self.ticks.load(Ordering::SeqCst)),
+            };
+            if self.pause_next.swap(false, Ordering::SeqCst) {
+                self.sampled.send(()).unwrap();
+                self.resume.lock().unwrap().recv().unwrap();
+            }
+            sample
+        }
+    }
+    let (sampled_tx, sampled_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let clock = Arc::new(OverlappingClock {
+        epoch: ClockEpochId::new(),
+        other_epoch: ClockEpochId::new(),
+        switch_epoch: AtomicBool::new(false),
+        ticks: AtomicU64::new(100),
+        pause_next: AtomicBool::new(false),
+        sampled: sampled_tx,
+        resume: Mutex::new(resume_rx),
+    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let c = RoomHandle::create(media(), "host", clock.clone()).unwrap();
+    let descriptor = runtime
+        .block_on(c.room.snapshot(&c.host_session))
+        .unwrap()
+        .media;
+    let a = runtime
+        .block_on(c.room.authorize_media(&c.host_session, descriptor.media_id))
+        .unwrap();
+    let b = runtime
+        .block_on(c.room.authorize_media(&c.host_session, descriptor.media_id))
+        .unwrap();
+    clock.pause_next.store(true, Ordering::SeqCst);
+    let (earlier, later) = std::thread::scope(|scope| {
+        let earlier = scope.spawn(|| a.check_active());
+        sampled_rx.recv().unwrap();
+        clock.ticks.store(101, Ordering::SeqCst);
+        let later = b.check_active();
+        resume_tx.send(()).unwrap();
+        (earlier.join().unwrap(), later)
+    });
+    assert_eq!(later, Ok(()));
+    assert_eq!(earlier, Ok(()));
+    // Genuine nonoverlapping regression and epoch changes remain invalid.
+    clock.ticks.store(100, Ordering::SeqCst);
+    assert_eq!(a.check_active(), Err(RoomError::ClockMismatch));
+    clock.ticks.store(101, Ordering::SeqCst);
+    clock.switch_epoch.store(true, Ordering::SeqCst);
+    assert_eq!(a.check_active(), Err(RoomError::ClockMismatch));
+}
