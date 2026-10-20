@@ -1,0 +1,19 @@
+[package]
+name = "room-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+shared-protocol = { path = "../shared-protocol" }
+sync-engine = { path = "../sync-engine" }
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+getrandom = "0.4"
+base64 = "0.22"
+sha2 = "0.10"
+subtle = "2"
+
+[dev-dependencies]
+sync-engine = { path = "../sync-engine", features = ["test-support"] }
