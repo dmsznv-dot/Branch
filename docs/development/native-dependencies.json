@@ -24,7 +24,7 @@
       ],
       "observed_artifact": {
         "file": "libmpv.so.2.5.0",
-        "sha256": "93a39f6576ea1909ce6ca010f39683b324361603c2dedf7a620de3e2ca4b127f",
+        "sha256": "08afe916d00a06bdb1efce0cd3270196fc5f32afd73e624982a01524a93775dd",
         "scope": "locally built Linux development artifact; not a target distributable"
       },
       "patches": [
@@ -37,8 +37,8 @@
         },
         {
           "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
-          "sha256": "ea38fb36e7c0b17cdbd6a26d27a72480665f628c79ec5be150abb2953eb40cc1",
-          "purpose": "Unregister and synchronize the stream cancellation callback under mp_cancel lock before close_fn reclaims its cookie.",
+          "sha256": "71dcf947cf5c677d76af48818e2363b2a732205f4dd2ae5ad5925ce1c1c0eeac",
+          "purpose": "Zero-initialize private stream state, then unregister and synchronize cancellation under mp_cancel lock before close_fn reclaims its cookie; optional cancel_fn remains valid.",
           "upstream_status": "Local downstream fix; no upstream merge claim",
           "license": "GPL-2.0-or-later"
         }
@@ -974,7 +974,7 @@
         },
         {
           "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
-          "sha256": "ea38fb36e7c0b17cdbd6a26d27a72480665f628c79ec5be150abb2953eb40cc1"
+          "sha256": "71dcf947cf5c677d76af48818e2363b2a732205f4dd2ae5ad5925ce1c1c0eeac"
         }
       ]
     },
@@ -993,7 +993,7 @@
         },
         {
           "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
-          "sha256": "ea38fb36e7c0b17cdbd6a26d27a72480665f628c79ec5be150abb2953eb40cc1"
+          "sha256": "71dcf947cf5c677d76af48818e2363b2a732205f4dd2ae5ad5925ce1c1c0eeac"
         }
       ]
     }

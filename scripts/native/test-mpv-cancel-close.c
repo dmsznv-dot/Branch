@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <mpv/client.h>
 #include <mpv/stream_cb.h>
@@ -20,6 +21,7 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static bool close_entered, trigger_done, release_close;
 static unsigned close_calls, late_cancels, read_calls;
+static FILE *optional_file;
 static int cookie; // intentionally alive until native shutdown has joined
 
 // The runner substitutes only the real open/playback cancellation calls with this
@@ -58,6 +60,10 @@ static int64_t read_invalid(void *data, char *buffer, uint64_t count)
     pthread_mutex_lock(&lock);
     read_calls++;
     pthread_mutex_unlock(&lock);
+    if (optional_file) {
+        size_t n = fread(buffer, 1, (size_t)count, optional_file);
+        return ferror(optional_file) ? -1 : (int64_t)n;
+    }
     return 0; // invalid/empty media forces actual demux-open failure cleanup
 }
 
@@ -77,8 +83,28 @@ static void close_cookie(void *data)
     close_calls++;
     close_entered = true;
     pthread_cond_broadcast(&wake);
-    wait_flag(&release_close);
+    if (!optional_file)
+        wait_flag(&release_close);
     pthread_mutex_unlock(&lock);
+}
+
+static int64_t seek_file(void *data, int64_t offset)
+{
+    CHECK(data == &cookie && optional_file);
+    if (offset < 0 || fseeko(optional_file, offset, SEEK_SET) != 0)
+        return -1;
+    return offset;
+}
+
+static int64_t size_file(void *data)
+{
+    CHECK(data == &cookie && optional_file);
+    off_t current = ftello(optional_file);
+    if (current < 0 || fseeko(optional_file, 0, SEEK_END) != 0)
+        return -1;
+    off_t size = ftello(optional_file);
+    CHECK(fseeko(optional_file, current, SEEK_SET) == 0);
+    return size;
 }
 
 static int open_cookie(void *data, char *uri, mpv_stream_cb_info *info)
@@ -86,7 +112,9 @@ static int open_cookie(void *data, char *uri, mpv_stream_cb_info *info)
     CHECK(data == &cookie);
     (void)uri;
     *info = (mpv_stream_cb_info){.cookie = data, .read_fn = read_invalid,
-        .close_fn = close_cookie, .cancel_fn = cancel_cookie};
+        .close_fn = close_cookie, .cancel_fn = optional_file ? NULL : cancel_cookie,
+        .seek_fn = optional_file ? seek_file : NULL,
+        .size_fn = optional_file ? size_file : NULL};
     return 0;
 }
 
@@ -96,8 +124,13 @@ static void *shutdown_core(void *handle)
     return NULL;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    CHECK(argc == 1 || (argc == 3 && strcmp(argv[1], "--without-cancel") == 0));
+    if (argc == 3) {
+        optional_file = fopen(argv[2], "rb");
+        CHECK(optional_file);
+    }
     mpv_handle *handle = mpv_create();
     CHECK(handle);
     const char *options[][2] = {
@@ -112,6 +145,23 @@ int main(void)
     CHECK(mpv_initialize(handle) == 0);
     const char *command[] = {"loadfile", "ordertest://invalid", NULL};
     CHECK(mpv_command_async(handle, 1, command) == 0);
+    if (optional_file) {
+        struct timespec start, now;
+        CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0);
+        for (;;) {
+            mpv_event *event = mpv_wait_event(handle, 0.1);
+            if (event->event_id == MPV_EVENT_FILE_LOADED)
+                break;
+            CHECK(event->event_id != MPV_EVENT_END_FILE);
+            CHECK(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+            CHECK(now.tv_sec - start.tv_sec < 5);
+        }
+        mpv_terminate_destroy(handle);
+        CHECK(close_calls == 1 && read_calls > 0 && late_cancels == 0);
+        CHECK(fclose(optional_file) == 0);
+        puts("optional_cancel_stream_close_verified loaded=1 close_calls=1 cancel_fn=NULL");
+        return 0;
+    }
     pthread_mutex_lock(&lock);
     wait_flag(&close_entered);
     pthread_mutex_unlock(&lock);

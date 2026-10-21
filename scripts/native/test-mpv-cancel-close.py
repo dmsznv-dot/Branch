@@ -56,3 +56,8 @@ link = [str(observer) if arg == entry['output'] else arg for arg in link
         if arg not in ('-shared', '-Wl,-soname,libmpv.so.2', '-Wl,-Bsymbolic')]
 subprocess.run(link + [str(harness)], cwd=build, check=True, timeout=30)
 subprocess.run([str(exe)], check=True, timeout=12)
+
+# A valid media stream may supply only mandatory read/close plus seek/size;
+# cancellation is explicitly optional. Keep this separate from the order case.
+subprocess.run([str(exe), '--without-cancel', str(repo / 'target/player-fixtures/h264.mp4')],
+               check=True, timeout=12)

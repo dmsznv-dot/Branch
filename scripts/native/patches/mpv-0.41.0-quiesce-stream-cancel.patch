@@ -5,3 +5,8 @@
 +    if (p->cancel)
 +        mp_cancel_set_cb(p->cancel, NULL, NULL);
      p->info.close_fn(p->info.cookie);
+@@ -55,3 +57,3 @@
+ {
+-    struct priv *p = talloc_ptrtype(stream, p);
++    struct priv *p = talloc_zero_ptrtype(stream, p);
+     stream->priv = p;
