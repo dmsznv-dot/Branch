@@ -8,3 +8,8 @@ pub use model::{
     DecoderInfo, EngineCommand, EngineSnapshot, PlaybackGeneration, PlayerStatus, Track, TrackKind,
 };
 pub use source::SelectedFile;
+mod mpv;
+pub use mpv::{EngineHandle, EngineMode};
+
+#[cfg(feature = "native-mpv")]
+pub use mpv::{DecodeDiagnostics, GlResolver, MpvRenderer, RenderEndpoint, RenderTarget};

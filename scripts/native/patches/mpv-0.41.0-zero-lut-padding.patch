@@ -1,0 +1,7 @@
+--- a/video/out/gpu/video.c
++++ b/video/out/gpu/video.c
+@@ -1851,3 +1851,3 @@
+     static const int lut_size = 256;
+-    float *weights = talloc_array(NULL, float, lut_size * stride);
++    float *weights = talloc_zero_array(NULL, float, lut_size * stride);
+     mp_compute_lut(scaler->kernel, lut_size, stride, weights);
