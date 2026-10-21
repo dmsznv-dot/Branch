@@ -3,6 +3,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -113,6 +114,36 @@ class ToolchainTests(unittest.TestCase):
         with self.assertRaises(BUILDER_MODULE.Blocked) as rejected:
             BUILDER_MODULE.select_toolchain(self.toolchain,{'CMAKE_TOOLCHAIN_FILE':'unreviewed.cmake'})
         self.assertEqual(str(rejected.exception),'compiler_override')
+
+
+class SymlinkDriverTests(unittest.TestCase):
+    def setUp(self):
+        if os.name != 'posix':
+            self.skipTest('POSIX argv0 driver fixture')
+        self.temp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root=Path(self.temp.name)
+        self.driver=root/'driver'
+        self.driver.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then echo "synthetic shared compiler 1"; else case "${0##*/}" in *++) echo cxx;; *) echo c;; esac; fi\n')
+        self.driver.chmod(0o755)
+        self.cc,self.cxx=root/'cc',root/'c++'
+        self.cc.symlink_to(self.driver.name)
+        self.cxx.symlink_to(self.driver.name)
+        digest=hashlib.sha256(self.driver.read_bytes()).hexdigest()
+        self.toolchain={'compiler':str(self.cc),'compiler_version':'synthetic shared compiler 1','compiler_sha256':digest,'provenance':'argv0 dispatch fixture','cxx_compiler':str(self.cxx),'cxx_compiler_version':'synthetic shared compiler 1','cxx_compiler_sha256':digest,'cxx_provenance':'argv0 dispatch fixture'}
+
+    def test_symlink_invocation_preserves_cxx_driver_mode(self):
+        env,receipt=BUILDER_MODULE.select_toolchain(self.toolchain,{})
+        self.assertEqual(subprocess.check_output([env['CC']],text=True).strip(),'c')
+        self.assertEqual(subprocess.check_output([env['CXX']],text=True).strip(),'cxx')
+        self.assertEqual(env['CXX'],str(self.cxx))
+        self.assertEqual(receipt['cxx']['executable'],'c++')
+        self.assertEqual(receipt['cc']['sha256'],receipt['cxx']['sha256'])
+
+    def test_inherited_same_referent_with_different_driver_name_is_rejected(self):
+        with self.assertRaises(BUILDER_MODULE.Blocked) as rejected:
+            BUILDER_MODULE.select_toolchain(self.toolchain,{'CXX':str(self.cc)})
+        self.assertEqual(str(rejected.exception),'inherited_compiler_mismatch')
 
 
 class GeneratedOutputTests(unittest.TestCase):

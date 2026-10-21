@@ -58,8 +58,10 @@ compilation paths have not yet been run and must be validated before acceptance.
 The toolchain lock requires `compiler`, `compiler_version`, `compiler_sha256`,
 `provenance` and the corresponding C++ fields `cxx_compiler`,
 `cxx_compiler_version`, `cxx_compiler_sha256`, `cxx_provenance`. Both executable
-paths are resolved and their bytes/version checked before use; inherited CC/CXX
-must resolve to those same executables. The selected absolute drivers are forced
+invocation paths are made absolute while preserving symlinks and driver names;
+the referent bytes are hashed and version checks run through the retained path.
+Inherited CC/CXX must select those same invocation paths. This preserves C++
+driver mode when `clang++` points to the same binary as `clang`. The drivers are forced
 into each build system and recorded by basename/hash/version/provenance in the
 receipt. Recipe and inherited CMake/Meson/compiler overrides are rejected.
 

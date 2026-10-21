@@ -102,11 +102,14 @@ def select_toolchain(toolchain, inherited):
     for variable, key, provenance in [('CC', 'compiler', 'provenance'), ('CXX', 'cxx_compiler', 'cxx_provenance')]:
         selected = shutil.which(toolchain[key], path=inherited.get('PATH'))
         need(selected, 'build_tool_missing')
-        executable = Path(selected).resolve()
+        # Preserve argv0: clang++ may be a symlink to clang, and resolving it
+        # for execution would silently select the C driver/linker mode.
+        executable = Path(selected).absolute()
+        referent = executable.resolve(strict=True)
         if inherited.get(variable):
             previous = shutil.which(inherited[variable], path=inherited.get('PATH'))
-            need(previous and Path(previous).resolve() == executable, 'inherited_compiler_mismatch')
-        digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+            need(previous and Path(previous).absolute() == executable, 'inherited_compiler_mismatch')
+        digest = hashlib.sha256(referent.read_bytes()).hexdigest()
         need(digest == toolchain[key + '_sha256'], 'compiler_hash')
         version = subprocess.check_output([str(executable), '--version'], text=True).splitlines()[0]
         need(version == toolchain[key + '_version'], 'compiler_version')
