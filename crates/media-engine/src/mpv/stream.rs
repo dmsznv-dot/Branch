@@ -327,15 +327,20 @@ mod callbacks {
     }
     unsafe extern "C" fn cancel(data: *mut c_void) {
         let _ = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: mpv guarantees cancel finishes before close. No file/cursor
-            // locks, no join, no mpv/GL call; only token signaling occurs here.
+            // SAFETY: the required mpv quiesce-stream-cancel patch clears this
+            // callback under mp_cancel.lock before invoking close_fn. It waits
+            // for in-flight cancel and prevents later cookie access. No file/
+            // cursor locks, join or mpv/GL call; only token signaling here.
             unsafe { &*data.cast::<Cookie>() }.source.cancel.cancel();
         }));
     }
     unsafe extern "C" fn close(data: *mut c_void) {
         let _ = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: mpv transfers its unique Box ownership back exactly once
-            // after all callbacks finish; registration Arc remains separate.
+            // SAFETY: mpv transfers unique Box ownership back exactly once.
+            // The required quiesce-stream-cancel dependency patch synchronizes/
+            // unregisters cancel before close_fn; read/seek are on this same
+            // demux thread. No native callback can still use this cookie.
+            // Registration Arc remains separately owned through core teardown.
             drop(unsafe { Box::from_raw(data.cast::<Cookie>()) });
         }));
     }

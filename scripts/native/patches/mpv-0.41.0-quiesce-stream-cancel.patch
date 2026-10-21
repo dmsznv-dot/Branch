@@ -1,0 +1,7 @@
+--- a/stream/stream_cb.c
++++ b/stream/stream_cb.c
+@@ -50,2 +50,4 @@
+     struct priv *p = s->priv;
++    if (p->cancel)
++        mp_cancel_set_cb(p->cancel, NULL, NULL);
+     p->info.close_fn(p->info.cookie);

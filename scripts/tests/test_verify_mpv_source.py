@@ -76,6 +76,26 @@ class SourceIntegrity(unittest.TestCase):
         self.git('update-index', '--skip-worktree', 'other.c')
         self.check(success=False)
 
+    def test_complete_exact_prior_patch_prefix_only(self):
+        other = self.source / 'other.c'
+        other.write_text('corrected();\n')
+        second = self.root / 'second.patch'
+        second.write_text(self.git('diff', '--binary', '--', 'other.c'))
+        other.write_text('original();\n')
+        data = json.loads(self.manifest.read_text())
+        data['linux_development']['mpv']['patches'].append({
+            'file': 'second.patch',
+            'sha256': hashlib.sha256(second.read_bytes()).hexdigest()})
+        self.manifest.write_text(json.dumps(data))
+        self.git('apply', str(second))
+        self.check(apply=True, success=False)  # out-of-order subset is rejected
+        other.write_text('original();\n')
+        self.git('apply', str(self.patch))
+        self.check(success=False)  # verification requires the complete patch set
+        self.check(apply=True)  # install may complete an exact prior prefix
+        self.check()
+        self.assertEqual(other.read_text(), 'corrected();\n')
+
     def test_reject_wrong_patch_hash_and_revision(self):
         self.patch.write_text(self.patch.read_text() + '\n')
         self.check(apply=True, success=False)

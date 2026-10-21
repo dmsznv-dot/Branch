@@ -41,14 +41,17 @@ def verify(source, manifest, repo, apply=False):
     with tempfile.TemporaryDirectory(prefix='mpv-index-') as temp:
         env = dict(os.environ, GIT_INDEX_FILE=str(pathlib.Path(temp) / 'index'))
         git('read-tree', pin['revision'], env=env)
+        prefixes = [b'']
         for patch in patches:
             subprocess.run(['git', '-C', str(source), 'apply', '--cached', '-'],
                            input=patch, env=env, check=True, capture_output=True)
-        expected = git('diff', '--cached', '--binary', '--no-ext-diff',
-                       '--no-textconv', pin['revision'], env=env)
+            prefixes.append(git('diff', '--cached', '--binary', '--no-ext-diff',
+                                '--no-textconv', pin['revision'], env=env))
+        expected = prefixes[-1]
     actual = git('diff', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD')
-    if not actual and apply:
-        for patch in patches:
+    if apply and actual != expected:
+        require(actual in prefixes, 'diff')
+        for patch in patches[prefixes.index(actual):]:
             subprocess.run(['git', '-C', str(source), 'apply', '-'],
                            input=patch, check=True, capture_output=True)
         actual = git('diff', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD')

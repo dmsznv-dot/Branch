@@ -24,7 +24,7 @@
       ],
       "observed_artifact": {
         "file": "libmpv.so.2.5.0",
-        "sha256": "a35129a76f10415c968feea58e42a81a03072394494f7758f0a9c3cc309e9df2",
+        "sha256": "93a39f6576ea1909ce6ca010f39683b324361603c2dedf7a620de3e2ca4b127f",
         "scope": "locally built Linux development artifact; not a target distributable"
       },
       "patches": [
@@ -34,10 +34,18 @@
           "purpose": "Initialize scaler lookup-texture padding before uploading the full allocation; downstream one-line correction of mpv 0.41.0 uninitialized heap data.",
           "upstream_status": "Local downstream fix; no upstream merge claim",
           "license": "GPL-2.0-or-later"
+        },
+        {
+          "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
+          "sha256": "ea38fb36e7c0b17cdbd6a26d27a72480665f628c79ec5be150abb2953eb40cc1",
+          "purpose": "Unregister and synchronize the stream cancellation callback under mp_cancel lock before close_fn reclaims its cookie.",
+          "upstream_status": "Local downstream fix; no upstream merge claim",
+          "license": "GPL-2.0-or-later"
         }
       ],
       "observed_version": "mpv v0.41.0-dirty",
-      "source_integrity": "scripts/native/verify-mpv-source.py requires exact base-plus-hashed-patches diff, clean index, and no untracked/ignored source artifacts; Meson builds out of tree."
+      "source_integrity": "scripts/native/verify-mpv-source.py requires exact base-plus-hashed-patches diff, clean index, and no untracked/ignored source artifacts; Meson builds out of tree.",
+      "callback_order_regression": "scripts/native/test-mpv-cancel-close.py (test-only observed native objects; production artifact has no hooks)"
     },
     "ffmpeg": {
       "version": "7:7.1.5-0+deb13u1",
@@ -963,6 +971,10 @@
         {
           "file": "scripts/native/patches/mpv-0.41.0-zero-lut-padding.patch",
           "sha256": "6b06d553c42ff0483dad3b5eb065cd7d22620020bee3b4bb79922e388adc64ea"
+        },
+        {
+          "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
+          "sha256": "ea38fb36e7c0b17cdbd6a26d27a72480665f628c79ec5be150abb2953eb40cc1"
         }
       ]
     },
@@ -978,6 +990,10 @@
         {
           "file": "scripts/native/patches/mpv-0.41.0-zero-lut-padding.patch",
           "sha256": "6b06d553c42ff0483dad3b5eb065cd7d22620020bee3b4bb79922e388adc64ea"
+        },
+        {
+          "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
+          "sha256": "ea38fb36e7c0b17cdbd6a26d27a72480665f628c79ec5be150abb2953eb40cc1"
         }
       ]
     }
