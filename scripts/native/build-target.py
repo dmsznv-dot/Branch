@@ -76,8 +76,17 @@ def validate_plan(manifest, target):
     return pin
 
 
+def source_git_environment(inherited=None):
+    # Commit IDs must refer to their original objects, regardless of local
+    # refs/replace or an inherited replacement namespace.
+    return dict(os.environ if inherited is None else inherited,
+                GIT_NO_REPLACE_OBJECTS='1')
+
+
 def run(command, cwd, env, log):
     # Full local compiler output stays in ignored build logs, not public reports.
+    if command[0] == 'git':
+        env = source_git_environment(env)
     with log.open('ab') as output:
         subprocess.run(command, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT, check=True)
 
@@ -87,13 +96,20 @@ def verify_pristine_source(source):
     # All generated outputs belong in the separate build directory.
     command = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
                '-c', 'core.untrackedCache=false', '-C', str(source)]
-    entries = subprocess.check_output([*command, 'ls-files', '-v', '-z']).split(b'\0')
+    env = source_git_environment()
+    entries = subprocess.check_output([*command, 'ls-files', '-v', '-z'], env=env).split(b'\0')
     need(all(not entry or (entry[:1] != b'S' and not entry[:1].islower()) for entry in entries), 'source_dirty')
-    need(not subprocess.check_output([*command, 'ls-files', '--others', '-z']), 'source_dirty')
+    need(not subprocess.check_output([*command, 'ls-files', '--others', '-z'], env=env), 'source_dirty')
     for staged in ([], ['--cached']):
         result = subprocess.run([*command, 'diff', '--no-ext-diff', '--no-textconv',
-                                 '--quiet', *staged, '--'], stderr=subprocess.DEVNULL)
+                                 '--quiet', *staged, '--'], env=env, stderr=subprocess.DEVNULL)
         need(result.returncode == 0, 'source_dirty')
+
+
+def archive_source(source, destination, env=None):
+    with destination.open('wb') as archive:
+        subprocess.run(['git', '-C', str(source), 'archive', '--format=tar', 'HEAD'],
+                       stdout=archive, env=source_git_environment(env), check=True)
 
 
 def select_toolchain(toolchain, inherited):
@@ -139,6 +155,7 @@ def build_sdk(pin, target, manifest_path, work):
     for command in ('git', 'cmake', 'meson', 'ninja', 'make', 'pkg-config'):
         need(shutil.which(command), 'build_tool_missing')
     env, toolchain = select_toolchain(pin['toolchain'], os.environ)
+    env = source_git_environment(env)
     prefix, logs, notices = prepare_generated_outputs(work)
     env.update(PKG_CONFIG_PATH=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), PKG_CONFIG_LIBDIR=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), CMAKE_PREFIX_PATH=str(prefix), CMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local')
     env['PATH'] = str(prefix / 'bin') + os.pathsep + env['PATH']
@@ -164,7 +181,7 @@ def build_sdk(pin, target, manifest_path, work):
             run(['git', 'init', str(source)], work, env, log)
             run(['git', '-C', str(source), 'fetch', '--depth=1', item['url'], item['revision']], work, env, log)
             run(['git', '-C', str(source), 'checkout', '--detach', 'FETCH_HEAD'], work, env, log)
-        need(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip() == item['revision'], 'source_revision')
+        need(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], env=env, text=True).strip() == item['revision'], 'source_revision')
         if name == 'mpv':
             run([sys.executable, str(REPO / 'scripts/native/verify-mpv-source.py'), str(source), str(manifest_path), str(REPO), '--apply'], work, env, log)
         else:
@@ -192,8 +209,7 @@ def build_sdk(pin, target, manifest_path, work):
         component_notices.mkdir()
         for license_file in item['license_files']:
             shutil.copy2(source / license_file, component_notices / Path(license_file).name)
-        with (component_notices / (name + '-source.tar')).open('wb') as archive:
-            subprocess.run(['git', '-C', str(source), 'archive', '--format=tar', 'HEAD'], stdout=archive, check=True)
+        archive_source(source, component_notices / (name + '-source.tar'), env)
         if name == 'mpv':
             for patch in pin['mpv_patches']:
                 shutil.copy2(REPO / patch['file'], component_notices / Path(patch['file']).name)

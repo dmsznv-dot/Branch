@@ -38,6 +38,8 @@ out-of-source build directories. They do not install target libraries on Linux.
 Every non-mpv checkout must have a pristine index and working tree, including
 no ignored/untracked files and no assume-unchanged or skip-worktree hints.
 The check is read-only; generated outputs belong in the separate build directory.
+Source Git commands and build subprocesses force `GIT_NO_REPLACE_OBJECTS=1` so
+local replacement refs cannot redefine pinned commit contents or source archives.
 
 The following are intentionally unresolved: libass/font/shaping closure,
 libplacebo/GPU compiler closure, Lua 5.2 shared build, dav1d AV1 software path,

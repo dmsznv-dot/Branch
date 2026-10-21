@@ -1,6 +1,7 @@
 """Exercise source admission with real Git trees and deliberate tampering."""
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -37,11 +38,11 @@ class SourceIntegrity(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.source), *args], text=True)
 
-    def check(self, apply=False, success=True):
+    def check(self, apply=False, success=True, env=None):
         cmd = ['python3', str(HELPER), str(self.source), str(self.manifest), str(self.root)]
         if apply:
             cmd.append('--apply')
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
         return result
 
@@ -104,6 +105,24 @@ class SourceIntegrity(unittest.TestCase):
         data['linux_development']['mpv']['revision'] = '0' * 40
         self.manifest.write_text(json.dumps(data))
         self.check(apply=True, success=False)
+
+    def test_replacement_commit_cannot_redefine_the_pinned_base(self):
+        env=dict(os.environ)
+        env.pop('GIT_NO_REPLACE_OBJECTS',None)
+        def git(*args):
+            return subprocess.check_output(['git','-C',str(self.source),*args],text=True,env=env,stderr=subprocess.DEVNULL)
+        original=git('rev-parse','HEAD').strip()
+        other=self.source/'other.c'
+        other.write_text('unreviewed_replacement();\n')
+        git('add','other.c')
+        git('commit','-qm','harmless replacement fixture')
+        replacement=git('rev-parse','HEAD').strip()
+        git('checkout','--detach',original)
+        git('replace',original,replacement)
+        git('reset','--hard',original)
+        self.assertEqual(git('rev-parse','HEAD').strip(),original)
+        self.check(apply=True,success=False,env=env)
+        self.assertEqual(other.read_text(),'unreviewed_replacement();\n')
 
 
 if __name__ == '__main__':

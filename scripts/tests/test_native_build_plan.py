@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -169,6 +170,47 @@ class GeneratedOutputTests(unittest.TestCase):
 
 
 class PristineSourceTests(unittest.TestCase):
+    def replacement_fixture(self):
+        temporary=tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root=Path(temporary.name)
+        source=root/'source'
+        source.mkdir()
+        env=dict(os.environ)
+        env.pop('GIT_NO_REPLACE_OBJECTS',None)
+        def git(*arguments):
+            return subprocess.check_output(['git','-C',str(source),*arguments],text=True,env=env,stderr=subprocess.DEVNULL)
+        git('init','-q')
+        git('config','user.name','Synthetic replacement fixture')
+        git('config','user.email','test@example.invalid')
+        (source/'other.c').write_text('original source\n')
+        git('add','.')
+        git('commit','-qm','original pinned source')
+        original=git('rev-parse','HEAD').strip()
+        (source/'other.c').write_text('unreviewed replacement\n')
+        git('commit','-qam','replacement source')
+        replacement=git('rev-parse','HEAD').strip()
+        git('checkout','--detach',original)
+        git('replace',original,replacement)
+        git('reset','--hard',original)
+        self.assertEqual(git('rev-parse','HEAD').strip(),original)
+        return root,source,env
+
+    def test_replacement_commit_cannot_hide_generic_source_changes(self):
+        _,source,env=self.replacement_fixture()
+        code='import importlib.util,sys; s=importlib.util.spec_from_file_location("builder",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.verify_pristine_source(m.Path(sys.argv[2]))'
+        result=subprocess.run([sys.executable,'-B','-c',code,str(BUILDER),str(source)],env=env,capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0,'replacement tree was admitted')
+        self.assertIn('source_dirty',result.stderr)
+        self.assertEqual((source/'other.c').read_text(),'unreviewed replacement\n')
+
+    def test_source_receipt_archive_uses_original_objects(self):
+        root,source,env=self.replacement_fixture()
+        archive=root/'source.tar'
+        BUILDER_MODULE.archive_source(source,archive,env)
+        with tarfile.open(archive) as contents:
+            self.assertEqual(contents.extractfile('other.c').read(),b'original source\n')
+
     def test_real_git_tree_rejects_all_hidden_or_visible_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)

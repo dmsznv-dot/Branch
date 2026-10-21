@@ -15,8 +15,10 @@ import tempfile
 
 def verify(source, manifest, repo, apply=False):
     pin = json.loads(manifest.read_text())['linux_development']['mpv']
+    source_env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
 
     def git(*args, env=None):
+        env = dict(source_env if env is None else env, GIT_NO_REPLACE_OBJECTS='1')
         return subprocess.check_output(
             ['git', '-C', str(source), *args], env=env, stderr=subprocess.PIPE)
 
@@ -39,7 +41,7 @@ def verify(source, manifest, repo, apply=False):
     # A disposable index computes the exact expected full-tree diff without
     # modifying the source's index, committing, or trusting a reverse-apply test.
     with tempfile.TemporaryDirectory(prefix='mpv-index-') as temp:
-        env = dict(os.environ, GIT_INDEX_FILE=str(pathlib.Path(temp) / 'index'))
+        env = dict(source_env, GIT_INDEX_FILE=str(pathlib.Path(temp) / 'index'))
         git('read-tree', pin['revision'], env=env)
         prefixes = [b'']
         for patch in patches:
@@ -53,7 +55,7 @@ def verify(source, manifest, repo, apply=False):
         require(actual in prefixes, 'diff')
         for patch in patches[prefixes.index(actual):]:
             subprocess.run(['git', '-C', str(source), 'apply', '-'],
-                           input=patch, check=True, capture_output=True)
+                           input=patch, env=source_env, check=True, capture_output=True)
         actual = git('diff', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD')
     require(actual == expected, 'diff')
     print('mpv_source_patch_verified')
