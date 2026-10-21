@@ -1,0 +1,100 @@
+name: Native player proof
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static:
+    name: Static verifier, pure API and UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: python -B -m unittest discover -s scripts/tests
+      - run: cargo test --locked -p media-engine
+      - run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --no-default-features
+      - run: npm ci --prefix apps/desktop
+      - run: npm --prefix apps/desktop test -- --run
+      - run: npm --prefix apps/desktop run typecheck
+      - run: npm --prefix apps/desktop run build
+  native:
+    name: Target preflight and conditional native build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - run: cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features
+      - run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --no-default-features
+      - name: Observe supply and fixture gate (BLOCKED is not a build pass)
+        id: gate
+        shell: python
+        env:
+          PLAYER_TARGET: ${{ matrix.target }}
+        run: |
+          import json, os, pathlib
+          pin = json.loads(pathlib.Path('docs/development/native-dependencies.json').read_text())['targets'][os.environ['PLAYER_TARGET']]
+          ready = pin.get('source_lock_complete') is True and pin.get('fixture_inventory_complete') is True and pin.get('status') == 'inventory_complete'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('ready=' + str(ready).lower() + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(os.environ['PLAYER_TARGET'] + ': ' + ('supply inventory admits native build' if ready else 'BLOCKED — source/toolchain, fixtures or observed artifact/license inventory incomplete; native build/decode/bundle steps did not run') + '\n')
+      - if: steps.gate.outputs.ready == 'true' && runner.os == 'macOS'
+        name: Build reviewed macOS source SDK, tests and candidate bundle
+        shell: bash
+        run: |
+          scripts/native/build-macos.sh
+          source target/native/aarch64-apple-darwin/activation.sh
+          npm ci --prefix apps/desktop
+          npm --prefix apps/desktop test -- --run
+          cargo test --locked -p media-engine --features native-mpv
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --features ipc-test
+          npm --prefix apps/desktop run tauri -- build --target aarch64-apple-darwin --bundles app --config "$PWD/target/native/aarch64-apple-darwin/bundle-config.json"
+          python scripts/verify-player-bundle.py --target aarch64-apple-darwin --bundle apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Branch.app
+      - if: steps.gate.outputs.ready == 'true' && runner.os == 'Windows'
+        name: Build reviewed Windows source SDK, tests and candidate bundle
+        shell: pwsh
+        run: |
+          ./scripts/native/build-windows.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          . ./target/native/x86_64-pc-windows-msvc/activation.ps1
+          npm ci --prefix apps/desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix apps/desktop test -- --run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p media-engine --features native-mpv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --features ipc-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $config = (Resolve-Path target/native/x86_64-pc-windows-msvc/bundle-config.json).Path
+          npm --prefix apps/desktop run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis --config $config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Inspect the installed/extracted payload directory, never treat the
+          # NSIS container as the DLL search directory. Path is set only after
+          # that extraction procedure is reviewed in the complete target lock.
+          $pin = (Get-Content docs/development/native-dependencies.json -Raw | ConvertFrom-Json).targets.'x86_64-pc-windows-msvc'
+          if (-not $pin.ci_extracted_bundle) { throw 'native_bundle_blocked:payload_extraction_unreviewed' }
+          python scripts/verify-player-bundle.py --target x86_64-pc-windows-msvc --bundle $pin.ci_extracted_bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # No native upload or release: this workflow is build evidence only.

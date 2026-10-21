@@ -113,3 +113,15 @@ The actual negative test uses Linux IN_OPEN monitoring and an ephemeral loopback
 Resource-policy and decoder outcomes are checked separately. The crafted MOV reference can parse its own video parameters but fail subsequent playback controls; `DecoderFailed` for that synthetic negative input is not a resource-policy failure. Unknown video codec gives `UnsupportedMedia`; a changed selected descriptor gives `SourceChanged`; missing primary selection gives `Unavailable`. Deleting a selected pathname preserves the opened descriptor and succeeds.
 
 Linux IN_OPEN evidence does not establish file-access policy on macOS/Windows; target resource tracing is still required. This is a fail-closed decoder policy, not an operating-system sandbox, and no native render/bundle acceptance is claimed.
+
+## Target source and bundle gates
+
+See [native-player-validation.md](native-player-validation.md) for the exact
+observed evidence and pending macOS/Windows acceptance matrix. Target source
+recipes are `scripts/native/build-macos.sh` and `build-windows.ps1`; both reject
+the incomplete source lock before downloading/building. Primary mpv/FFmpeg pins
+do not constitute a complete target closure. `verify-player-bundle.py` parses
+actual Mach-O/PE imports and admits only a complete hashed/licensed inventory;
+current target entries reject. No native bundle or clean-machine success is
+claimed. `.github/workflows/native-player.yml` separately runs static/pure/UI
+checks and explicitly reports conditional native stages as BLOCKED.

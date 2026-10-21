@@ -21,6 +21,14 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "skip"
+      }
+    }
   }
 }

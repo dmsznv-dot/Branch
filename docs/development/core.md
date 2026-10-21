@@ -100,6 +100,6 @@ synchronization. Stable real-network ≤250 ms acceptance, WebRTC/TURN, native
 libmpv/Tauri and signed bundle checks remain for B/C/D.
 
 The original four packages are selected explicitly for all-features core checks.
-`media-engine/native-mpv` is checked in the native-player workflow, which supplies
-the pinned patched SDK. Default workspace builds still need no libmpv or GTK.
+`media-engine/native-mpv` is a conditional native-player workflow check after
+the pinned patched SDK supply gate is complete. Default workspace builds still need no libmpv or GTK.
 The standalone Tauri workspace is excluded; see `apps/desktop/README.md`.

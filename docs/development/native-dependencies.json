@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Linux development evidence only; target entries block distribution until Task4 inventory is complete",
+  "scope": "Linux development evidence plus blocked target source/bundle inventories; static admission does not establish runtime acceptance.",
   "linux_development": {
     "platform": "Linux x86_64 Debian13 development only",
     "apt_source": "Debian signed trixie/trixie-security metadata",
@@ -988,7 +988,96 @@
           "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
           "sha256": "71dcf947cf5c677d76af48818e2363b2a732205f4dd2ae5ad5925ce1c1c0eeac"
         }
-      ]
+      ],
+      "source_lock_complete": false,
+      "source_lock_reason": "Target build closure/toolchain/runtime licensing not observed; primary source pins alone do not authorize a build or bundle.",
+      "os_floor": "11.0",
+      "build_recipe": "scripts/native/build-macos.sh",
+      "build_order": [],
+      "runtime_files": {},
+      "toolchain": {},
+      "build_evidence": {},
+      "required_files": [],
+      "sources": {
+        "mpv": {
+          "url": "https://github.com/mpv-player/mpv.git",
+          "revision": "41f6a645068483470267271e1d09966ca3b9f413",
+          "license": "GPL-2.0-or-later",
+          "license_files": [
+            "LICENSE.GPL",
+            "LICENSE.LGPL"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dlibmpv=true",
+            "-Dcplayer=false",
+            "-Dtests=false",
+            "-Dlua=lua5.2",
+            "-Djavascript=disabled",
+            "-Dlibarchive=disabled",
+            "-Dbuild-date=false",
+            "-Dauto_features=disabled",
+            "-Dgl=enabled",
+            "-Dplain-gl=enabled",
+            "-Dcoreaudio=enabled",
+            "-Dbuildtype=release"
+          ],
+          "dependencies": [
+            "ffmpeg",
+            "libass",
+            "libplacebo",
+            "lua"
+          ],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "ffmpeg": {
+          "url": "https://github.com/FFmpeg/FFmpeg.git",
+          "revision": "140fd653aed8cad774f991ba083e2d01e86420c7",
+          "tag": "n8.0",
+          "tag_object": "a4044e04486d1136022498891088a90baf5b2775",
+          "pin_evidence": "Authoritative upstream git ls-remote refs/tags/n8.0 and peeled refs/tags/n8.0^{} observed 2026-10-21; no target artifact build claimed.",
+          "license": "GPL-2.0-or-later",
+          "license_files": [
+            "COPYING.GPLv2",
+            "LICENSE.md"
+          ],
+          "build_system": "configure",
+          "configure_flags": [
+            "--enable-shared",
+            "--disable-static",
+            "--disable-programs",
+            "--disable-doc",
+            "--disable-network",
+            "--disable-autodetect",
+            "--enable-gpl",
+            "--enable-libdav1d",
+            "--enable-videotoolbox",
+            "--enable-audiotoolbox"
+          ],
+          "dependencies": [
+            "dav1d"
+          ],
+          "recipe": "scripts/native/build-target.py"
+        }
+      },
+      "unresolved_dependencies": [
+        "libass and font/text shaping closure (FreeType, HarfBuzz, FriBidi and chosen font backend)",
+        "libplacebo closure and disabled/enabled GPU compiler backends",
+        "Lua 5.2 source and shared build recipe",
+        "dav1d AV1 software decoder",
+        "native compiler/build-tool provenance and redistributable runtime closure",
+        "all produced artifact hashes, parsed imports, exact license/notices/corresponding-source inventory",
+        "verified fixture generation for native CI"
+      ],
+      "license_obligations": {
+        "status": "unreviewed_target_closure",
+        "notices": [],
+        "corresponding_source": [],
+        "distribution_allowed": false
+      },
+      "fixture_inventory_complete": false,
+      "ci_toolchain_provisioning": "BLOCKED: complete and verify native source/toolchain closure before enabling the conditional native steps.",
+      "ci_extracted_bundle": null
     },
     "x86_64-pc-windows-msvc": {
       "status": "blocked_pending_native_build_and_inventory",
@@ -1007,7 +1096,102 @@
           "file": "scripts/native/patches/mpv-0.41.0-quiesce-stream-cancel.patch",
           "sha256": "71dcf947cf5c677d76af48818e2363b2a732205f4dd2ae5ad5925ce1c1c0eeac"
         }
-      ]
+      ],
+      "source_lock_complete": false,
+      "source_lock_reason": "Target build closure/toolchain/runtime licensing not observed; primary source pins alone do not authorize a build or bundle.",
+      "os_floor": "Windows 10 1809 (build 17763); Windows 11 separately tested",
+      "build_recipe": "scripts/native/build-windows.ps1",
+      "build_order": [],
+      "runtime_files": {},
+      "toolchain": {},
+      "build_evidence": {},
+      "required_files": [],
+      "sources": {
+        "mpv": {
+          "url": "https://github.com/mpv-player/mpv.git",
+          "revision": "41f6a645068483470267271e1d09966ca3b9f413",
+          "license": "GPL-2.0-or-later",
+          "license_files": [
+            "LICENSE.GPL",
+            "LICENSE.LGPL"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dlibmpv=true",
+            "-Dcplayer=false",
+            "-Dtests=false",
+            "-Dlua=lua5.2",
+            "-Djavascript=disabled",
+            "-Dlibarchive=disabled",
+            "-Dbuild-date=false",
+            "-Dauto_features=disabled",
+            "-Dgl=enabled",
+            "-Dplain-gl=enabled",
+            "-Dwasapi=enabled",
+            "-Dbuildtype=release"
+          ],
+          "dependencies": [
+            "ffmpeg",
+            "libass",
+            "libplacebo",
+            "lua"
+          ],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "ffmpeg": {
+          "url": "https://github.com/FFmpeg/FFmpeg.git",
+          "revision": "140fd653aed8cad774f991ba083e2d01e86420c7",
+          "tag": "n8.0",
+          "tag_object": "a4044e04486d1136022498891088a90baf5b2775",
+          "pin_evidence": "Authoritative upstream git ls-remote refs/tags/n8.0 and peeled refs/tags/n8.0^{} observed 2026-10-21; no target artifact build claimed.",
+          "license": "GPL-2.0-or-later",
+          "license_files": [
+            "COPYING.GPLv2",
+            "LICENSE.md"
+          ],
+          "build_system": "configure",
+          "configure_flags": [
+            "--enable-shared",
+            "--disable-static",
+            "--disable-programs",
+            "--disable-doc",
+            "--disable-network",
+            "--disable-autodetect",
+            "--enable-gpl",
+            "--enable-libdav1d",
+            "--target-os=mingw32",
+            "--arch=x86_64",
+            "--enable-d3d11va",
+            "--enable-dxva2"
+          ],
+          "dependencies": [
+            "dav1d"
+          ],
+          "recipe": "scripts/native/build-target.py"
+        }
+      },
+      "unresolved_dependencies": [
+        "libass and font/text shaping closure (FreeType, HarfBuzz, FriBidi and chosen font backend)",
+        "libplacebo closure and disabled/enabled GPU compiler backends",
+        "Lua 5.2 source and shared build recipe",
+        "dav1d AV1 software decoder",
+        "native compiler/build-tool provenance and redistributable runtime closure",
+        "all produced artifact hashes, parsed imports, exact license/notices/corresponding-source inventory",
+        "verified fixture generation for native CI"
+      ],
+      "license_obligations": {
+        "status": "unreviewed_target_closure",
+        "notices": [],
+        "corresponding_source": [],
+        "distribution_allowed": false
+      },
+      "webview2": {
+        "mode": "blocked",
+        "reason": "No verified target runtime/installer inventory or clean-machine observation; no automatic unverified download."
+      },
+      "fixture_inventory_complete": false,
+      "ci_toolchain_provisioning": "BLOCKED: complete and verify native source/toolchain closure before enabling the conditional native steps.",
+      "ci_extracted_bundle": null
     }
   }
 }

@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Build a reviewed native source closure. Incomplete locks stop before download.
+
+This is a candidate-build recipe, not distribution approval. The separate
+bundle verifier requires observed binary hashes/imports and reviewed notices.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+REPO = Path(__file__).resolve().parents[2]
+FFMPEG_COMMIT = '140fd653aed8cad774f991ba083e2d01e86420c7'
+
+
+class Blocked(Exception):
+    pass
+
+
+def need(condition, code):
+    if not condition:
+        raise Blocked(code)
+
+
+def relative(value):
+    need(isinstance(value, str) and value and not Path(value).is_absolute() and ':' not in value and '\\' not in value and all(part not in ('', '.', '..') for part in value.split('/')), 'plan_path')
+    return value
+
+
+def validate_plan(manifest, target):
+    need(target in ('aarch64-apple-darwin', 'x86_64-pc-windows-msvc'), 'target')
+    pin = manifest.get('targets', {}).get(target, {})
+    need(pin.get('source_lock_complete') is True, 'source_lock_incomplete')
+    sources, order = pin.get('sources', {}), pin.get('build_order', [])
+    need(order and len(order) == len(set(order)) and set(order) == set(sources), 'dependency_order')
+    need({'mpv', 'ffmpeg', 'libass', 'libplacebo', 'lua', 'dav1d'}.issubset(sources), 'dependency_order')
+    seen = set()
+    for name in order:
+        source = sources[name]
+        need(re.fullmatch(r'[a-z0-9][a-z0-9_-]*', name) and source.get('url', '').startswith('https://') and re.fullmatch(r'[0-9a-f]{40}', source.get('revision', '')), 'source_pin')
+        need(source.get('license') not in (None, '', 'unknown', 'NOASSERTION') and source.get('license_files'), 'source_license')
+        for value in source['license_files']:
+            relative(value)
+        need(source.get('build_system') in ('cmake', 'meson', 'configure') and isinstance(source.get('configure_flags'), list) and source['configure_flags'] and all(isinstance(value, str) for value in source['configure_flags']), 'source_recipe')
+        need(set(source.get('dependencies', [])).issubset(seen), 'dependency_order')
+        seen.add(name)
+    need(sources['ffmpeg']['revision'] == FFMPEG_COMMIT and sources['ffmpeg']['url'] == 'https://github.com/FFmpeg/FFmpeg.git', 'ffmpeg_pin')
+    need({'--enable-shared', '--disable-static', '--disable-programs', '--enable-gpl', '--enable-libdav1d'}.issubset(sources['ffmpeg']['configure_flags']) and 'dav1d' in sources['ffmpeg']['dependencies'], 'ffmpeg_flags')
+    mpv = manifest['linux_development']['mpv']
+    need(sources['mpv']['revision'] == mpv['revision'] and sources['mpv']['url'] == mpv['source_url'], 'mpv_pin')
+    need(pin.get('mpv_patches') == [{key: item[key] for key in ('file', 'sha256')} for item in mpv['patches']], 'mpv_patch')
+    for item in pin['mpv_patches']:
+        need(hashlib.sha256((REPO / relative(item['file'])).read_bytes()).hexdigest() == item['sha256'], 'mpv_patch')
+    need({'-Dlibmpv=true', '-Dcplayer=false', '-Dlua=lua5.2', '-Dgl=enabled', '-Dplain-gl=enabled', '-Dauto_features=disabled'}.issubset(sources['mpv']['configure_flags']), 'mpv_flags')
+    need(pin.get('os_floor') and all(pin.get('toolchain', {}).get(key) for key in ('compiler', 'compiler_version', 'provenance')), 'toolchain_provenance')
+    runtime = pin.get('runtime_files', {})
+    need(runtime and {'mpv', 'ffmpeg'}.issubset(runtime) and set(runtime).issubset(sources), 'runtime_file_plan')
+    for files in runtime.values():
+        need(files and all(relative(name) for name in files), 'runtime_file_plan')
+    return pin
+
+
+def run(command, cwd, env, log):
+    # Full local compiler output stays in ignored build logs, not public reports.
+    with log.open('ab') as output:
+        subprocess.run(command, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT, check=True)
+
+
+def verify_pristine_source(source):
+    # Do not let index hints or ignored files hide inputs from the source lock.
+    # All generated outputs belong in the separate build directory.
+    command = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+               '-c', 'core.untrackedCache=false', '-C', str(source)]
+    entries = subprocess.check_output([*command, 'ls-files', '-v', '-z']).split(b'\0')
+    need(all(not entry or (entry[:1] != b'S' and not entry[:1].islower()) for entry in entries), 'source_dirty')
+    need(not subprocess.check_output([*command, 'ls-files', '--others', '-z']), 'source_dirty')
+    for staged in ([], ['--cached']):
+        result = subprocess.run([*command, 'diff', '--no-ext-diff', '--no-textconv',
+                                 '--quiet', *staged, '--'], stderr=subprocess.DEVNULL)
+        need(result.returncode == 0, 'source_dirty')
+
+
+def build_sdk(pin, target, manifest_path, work):
+    mac = target == 'aarch64-apple-darwin'
+    need((mac and platform.system() == 'Darwin' and platform.machine() == 'arm64') or (not mac and os.name == 'nt'), 'native_host_required')
+    for command in ('git', 'cmake', 'meson', 'ninja', 'make', 'pkg-config', pin['toolchain']['compiler']):
+        need(shutil.which(command), 'build_tool_missing')
+    version = subprocess.check_output([pin['toolchain']['compiler'], '--version'], text=True).splitlines()[0]
+    need(pin['toolchain']['compiler_version'] == version, 'compiler_version')
+    prefix = work / 'sdk'
+    prefix.mkdir(parents=True, exist_ok=True)
+    logs = work / 'logs'
+    logs.mkdir(exist_ok=True)
+    env = dict(os.environ)
+    env.update(PKG_CONFIG_PATH=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), PKG_CONFIG_LIBDIR=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), CMAKE_PREFIX_PATH=str(prefix), CMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local')
+    env['PATH'] = str(prefix / 'bin') + os.pathsep + env['PATH']
+    env['CPPFLAGS'] = '-I' + shlex.quote(str(prefix / 'include'))
+    env['LDFLAGS'] = '-L' + shlex.quote(str(prefix / 'lib'))
+    env['CFLAGS'] = '-O2 -ffile-prefix-map=' + shlex.quote(str(work)) + '=.'
+    env['CXXFLAGS'] = env['CFLAGS']
+    if mac:
+        env['MACOSX_DEPLOYMENT_TARGET'] = pin['os_floor']
+    else:
+        need(env.get('MSYSTEM') == 'MINGW64', 'mingw64_environment_required')
+        need(subprocess.check_output([pin['toolchain']['compiler'], '-dumpmachine'], text=True).strip() == 'x86_64-w64-mingw32', 'compiler_target')
+    receipts = {}
+    notices = work / 'notices'
+    notices.mkdir(exist_ok=True)
+    for name in pin['build_order']:
+        item = pin['sources'][name]
+        source = work / 'source' / name
+        build = work / 'build' / name
+        source.parent.mkdir(exist_ok=True)
+        build.mkdir(parents=True, exist_ok=True)
+        log = logs / (name + '.log')
+        if not source.exists():
+            run(['git', 'init', str(source)], work, env, log)
+            run(['git', '-C', str(source), 'fetch', '--depth=1', item['url'], item['revision']], work, env, log)
+            run(['git', '-C', str(source), 'checkout', '--detach', 'FETCH_HEAD'], work, env, log)
+        need(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip() == item['revision'], 'source_revision')
+        if name == 'mpv':
+            run([sys.executable, str(REPO / 'scripts/native/verify-mpv-source.py'), str(source), str(manifest_path), str(REPO), '--apply'], work, env, log)
+        else:
+            verify_pristine_source(source)
+        for license_file in item['license_files']:
+            path = source / relative(license_file)
+            need(path.is_file() and path.resolve().is_relative_to(source.resolve()), 'source_license')
+        flags = item['configure_flags']
+        if item['build_system'] == 'meson':
+            need(not (build / 'meson-private/coredata.dat').exists(), 'fresh_build_directory_required')
+            run(['meson', 'setup', str(build), str(source), '--prefix=' + str(prefix), '--default-library=shared', '--wrap-mode=nofallback', *flags], work, env, log)
+            run(['meson', 'compile', '-C', str(build), '-j3'], work, env, log)
+            run(['meson', 'install', '-C', str(build)], work, env, log)
+        elif item['build_system'] == 'cmake':
+            options = ['-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=' + pin['os_floor']] if mac else ['-G', 'Ninja']
+            run(['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DBUILD_SHARED_LIBS=ON', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', *options, *flags], work, env, log)
+            run(['cmake', '--build', str(build), '--parallel', '3'], work, env, log)
+            run(['cmake', '--install', str(build)], work, env, log)
+        else:
+            run(['sh', str(source / 'configure'), '--prefix=' + prefix.as_posix(), *flags], build, env, log)
+            run(['make', '-j3'], build, env, log)
+            run(['make', 'install'], build, env, log)
+        component_notices = notices / name
+        component_notices.mkdir(exist_ok=True)
+        for license_file in item['license_files']:
+            shutil.copy2(source / license_file, component_notices / Path(license_file).name)
+        with (component_notices / (name + '-source.tar')).open('wb') as archive:
+            subprocess.run(['git', '-C', str(source), 'archive', '--format=tar', 'HEAD'], stdout=archive, check=True)
+        if name == 'mpv':
+            for patch in pin['mpv_patches']:
+                shutil.copy2(REPO / patch['file'], component_notices / Path(patch['file']).name)
+        receipts[name] = {key: item[key] for key in ('url', 'revision', 'license', 'configure_flags', 'dependencies', 'build_system')}
+        (component_notices / 'SOURCE-BUILD.json').write_text(json.dumps(receipts[name], indent=2) + '\n')
+    artifacts = []
+    for component, names in pin['runtime_files'].items():
+        for name in names:
+            path = prefix / relative(name)
+            need(path.is_file() and path.resolve().is_relative_to(prefix.resolve()), 'runtime_artifact_missing')
+            artifacts.append({'file': name, 'component': component, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+    if not mac:
+        need(shutil.which('gendef') and shutil.which('lib.exe'), 'msvc_import_library_tools')
+        dlls = [prefix / name for name in pin['runtime_files']['mpv'] if name.lower().endswith('libmpv-2.dll')]
+        need(len(dlls) == 1, 'mpv_dll_name')
+        run(['gendef', str(dlls[0])], work, env, logs / 'import-library.log')
+        run(['lib.exe', '/nologo', '/machine:x64', '/def:' + str(work / 'libmpv-2.def'), '/out:' + str(prefix / 'lib/mpv.lib')], work, env, logs / 'import-library.log')
+    evidence = {'status': 'sdk_built_distribution_unreviewed', 'target': target, 'os': platform.system() + ' ' + platform.release(), 'compiler': version, 'os_floor': pin['os_floor'], 'sources': receipts, 'artifacts': artifacts, 'mpv_patches': pin['mpv_patches']}
+    (work / 'sdk-receipt.json').write_text(json.dumps(evidence, indent=2) + '\n')
+    # No paths are emitted in the shareable receipt. Activation is local only.
+    resources = {str(path): 'licenses/' + path.relative_to(notices).as_posix() for path in notices.rglob('*') if path.is_file()}
+    libraries = [str(prefix / name) for names in pin['runtime_files'].values() for name in names]
+    config = {'bundle': {'active': True, 'resources': resources}}
+    if mac:
+        config['bundle']['macOS'] = {'minimumSystemVersion': pin['os_floor'], 'frameworks': libraries}
+    else:
+        config['bundle']['resources'].update({name: Path(name).name for name in libraries})
+        # Candidate installer uses the explicitly verified system runtime; no
+        # network bootstrapper is downloaded implicitly. Clean-machine QA is
+        # still blocked until a runtime/installer is inventoried and tested.
+        need(pin.get('webview2', {}).get('mode') == 'system_verified', 'webview2_unverified')
+        config['bundle']['windows'] = {'webviewInstallMode': {'type': 'skip'}}
+    (work / 'bundle-config.json').write_text(json.dumps(config, indent=2) + '\n')
+    native = str(prefix / 'lib')
+    (work / 'activation.sh').write_text('export PATH=' + shlex.quote(str(prefix / 'bin')) + ':"$PATH"\nexport LIBRARY_PATH=' + shlex.quote(native) + ':"${LIBRARY_PATH:-}"\nexport DYLD_LIBRARY_PATH=' + shlex.quote(native) + ':"${DYLD_LIBRARY_PATH:-}"\nexport CARGO_ENCODED_RUSTFLAGS=' + shlex.quote('-L\x1fnative=' + native) + '\n')
+    path_ps = (str(prefix / 'bin') + ';').replace("'", "''")
+    flags_ps = ('native=' + native).replace("'", "''")
+    (work / 'activation.ps1').write_text("$env:PATH = '" + path_ps + "' + $env:PATH\n$env:CARGO_ENCODED_RUSTFLAGS = '-L' + [char]31 + '" + flags_ps + "'\n")
+    print('native_sdk_built_distribution_unreviewed')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--target', required=True)
+    parser.add_argument('--manifest', type=Path, default=REPO / 'docs/development/native-dependencies.json')
+    parser.add_argument('--check-plan', action='store_true')
+    args = parser.parse_args()
+    try:
+        pin = validate_plan(json.loads(args.manifest.read_text()), args.target)
+        if args.check_plan:
+            print('source_plan_verified')
+        else:
+            build_sdk(pin, args.target, args.manifest.resolve(), REPO / 'target/native' / args.target)
+    except Blocked as error:
+        print('native_build_blocked:' + str(error), file=sys.stderr)
+        return 1
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+        print('native_build_blocked:recipe_or_tool_failure', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
