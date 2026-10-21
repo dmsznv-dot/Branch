@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/shared-protocol", "crates/sync-engine", "crates/room-server", "crates/media-stream", "crates/media-engine"]
+exclude = ["apps/desktop/src-tauri"]
 resolver = "3"
 
 [workspace.package]

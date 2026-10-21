@@ -101,10 +101,13 @@ impl EngineHandle {
             endpoint,
         })
     }
-    pub async fn open(&self, file: SelectedFile) -> Result<PlaybackGeneration, EngineError> {
-        let (tx, rx) = oneshot::channel();
+    pub fn submit_open(&self, file: SelectedFile) -> Result<super::OpenRequest, EngineError> {
+        let (tx, receiver) = oneshot::channel();
         self.send(Request::Open(file, tx))?;
-        rx.await.map_err(|_| EngineError::Cancelled)?
+        Ok(super::OpenRequest { receiver })
+    }
+    pub async fn open(&self, file: SelectedFile) -> Result<PlaybackGeneration, EngineError> {
+        self.submit_open(file)?.wait().await
     }
     pub async fn command(
         &self,
@@ -473,6 +476,46 @@ fn poll(client: &Client, state: &mut State, control: &Control) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn owned_open_requests_submit_b_while_a_is_pending() {
+        let (tx, mut rx) = mpsc::channel(QUEUE_CAPACITY);
+        let (_, snapshot) = watch::channel(State::new().snapshot);
+        let control = Arc::new(Control {
+            quit: CancellationToken::new(),
+            registry: Arc::new(Registry::default()),
+            diagnostics: Mutex::new(DecodeDiagnostics::default()),
+            returned_endpoint: Mutex::new(None),
+        });
+        let engine = EngineHandle {
+            tx,
+            snapshot,
+            control,
+            done: None,
+            thread: None,
+            endpoint: None,
+        };
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let a = engine
+            .submit_open(SelectedFile::open(file.path()).unwrap())
+            .unwrap();
+        let b = engine
+            .submit_open(SelectedFile::open(file.path()).unwrap())
+            .unwrap();
+        let Request::Open(_, a_reply) = rx.try_recv().unwrap() else {
+            panic!("expected A")
+        };
+        let Request::Open(_, b_reply) = rx.try_recv().unwrap() else {
+            panic!("expected B while A has no reply")
+        };
+        let generation = PlaybackGeneration::new();
+        b_reply.send(Ok(generation)).unwrap();
+        a_reply.send(Err(EngineError::Cancelled)).unwrap();
+        let b = b.wait();
+        fn assert_send<T: Send>(_: &T) {}
+        assert_send(&b);
+        assert_eq!(b.await, Ok(generation));
+        assert_eq!(a.wait().await, Err(EngineError::Cancelled));
+    }
     #[tokio::test]
     async fn queue_is_bounded_and_returns_busy() {
         let (tx, _rx) = mpsc::channel(QUEUE_CAPACITY);

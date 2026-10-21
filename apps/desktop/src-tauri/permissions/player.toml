@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "player-controls"
+description = "Only the four typed local-player commands. No paths, URLs or native command strings."
+commands.allow = ["choose_media", "player_command", "set_fullscreen", "player_snapshot"]

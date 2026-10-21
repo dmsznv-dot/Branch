@@ -31,8 +31,8 @@ Run the same core checks as CI:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace --all-features
+cargo clippy --locked -p shared-protocol -p sync-engine -p room-server -p media-stream --all-targets --all-features -- -D warnings
+cargo test --locked -p shared-protocol -p sync-engine -p room-server -p media-stream --all-features
 cargo build --locked --workspace --all-targets
 ```
 
@@ -98,3 +98,8 @@ explicitly ignore it until platform-specific sparse allocation is validated.
 ManualClock projections and local HTTP workflows do not measure real decoder
 synchronization. Stable real-network ≤250 ms acceptance, WebRTC/TURN, native
 libmpv/Tauri and signed bundle checks remain for B/C/D.
+
+The original four packages are selected explicitly for all-features core checks.
+`media-engine/native-mpv` is checked in the native-player workflow, which supplies
+the pinned patched SDK. Default workspace builds still need no libmpv or GTK.
+The standalone Tauri workspace is excluded; see `apps/desktop/README.md`.

@@ -32,8 +32,11 @@ impl EngineHandle {
     pub async fn start(_mode: EngineMode) -> Result<Self, EngineError> {
         Err(EngineError::Unavailable)
     }
-    pub async fn open(&self, _file: SelectedFile) -> Result<PlaybackGeneration, EngineError> {
+    pub fn submit_open(&self, _file: SelectedFile) -> Result<OpenRequest, EngineError> {
         Err(EngineError::Unavailable)
+    }
+    pub async fn open(&self, file: SelectedFile) -> Result<PlaybackGeneration, EngineError> {
+        self.submit_open(file)?.wait().await
     }
     pub async fn command(
         &self,
@@ -47,5 +50,18 @@ impl EngineHandle {
     }
     pub async fn shutdown(self) -> Result<(), EngineError> {
         Ok(())
+    }
+}
+
+/// An owned, generation-specific reply. Waiting does not borrow EngineHandle,
+/// so a newer selection can be submitted while an earlier load is pending.
+pub struct OpenRequest {
+    receiver: tokio::sync::oneshot::Receiver<Result<crate::PlaybackGeneration, crate::EngineError>>,
+}
+impl OpenRequest {
+    pub async fn wait(self) -> Result<crate::PlaybackGeneration, crate::EngineError> {
+        self.receiver
+            .await
+            .map_err(|_| crate::EngineError::Cancelled)?
     }
 }

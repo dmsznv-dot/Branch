@@ -9,7 +9,7 @@ pub use model::{
 };
 pub use source::SelectedFile;
 mod mpv;
-pub use mpv::{EngineHandle, EngineMode};
+pub use mpv::{EngineHandle, EngineMode, OpenRequest};
 
 #[cfg(feature = "native-mpv")]
 pub use mpv::{DecodeDiagnostics, GlResolver, MpvRenderer, RenderEndpoint, RenderTarget};

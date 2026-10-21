@@ -24,14 +24,14 @@ SOURCES
     apt-get "${apt_options[@]}" update
     package_lines=$(python3 - "$repo/docs/development/native-dependencies.json" <<'PY'
 import json,sys,urllib.parse
-wanted={'libmpv-dev','libwebkit2gtk-4.1-dev','libgtk-3-dev','librsvg2-dev','libssl-dev','cmake','ninja-build','meson','ffmpeg'}
+wanted={'libmpv-dev','libwebkit2gtk-4.1-dev','libgtk-3-dev','librsvg2-dev','libssl-dev','cmake','ninja-build','meson','ffmpeg','pkgconf','pkgconf-bin','libpkgconf3'}
 for p in json.load(open(sys.argv[1]))['linux_development']['package_archives']:
  name,version,_=p['name'].split('_')
  if name in wanted: print(name+'='+urllib.parse.unquote(version))
 PY
 )
     mapfile -t packages <<< "$package_lines"
-    [[ ${#packages[@]} == 9 ]] || { echo 'setup_error_package_pins' >&2; exit 1; }
+    [[ ${#packages[@]} == 12 ]] || { echo 'setup_error_package_pins' >&2; exit 1; }
     apt-get "${apt_options[@]}" --download-only --reinstall --no-install-recommends -y install "${packages[@]}"
 fi
 # Verify every archive before extraction. New/unrecorded dependency resolutions
@@ -75,6 +75,22 @@ lines.append('export PKG_CONFIG_SYSROOT_DIR='+shlex.quote(str(sdk)))
 pathlib.Path(sys.argv[2]).write_text('\n'.join(lines)+'\n')
 PY
 source "$repo/target/player-linux-activate.sh"
+# Tauri is a separate workspace, but Linux still needs its real development
+# headers/tools for API/build checks. Nothing here installs macOS/Windows SDKs.
+for binary in cmake pkg-config; do
+    command -v "$binary" >/dev/null || { echo "setup_error_tool_$binary" >&2; exit 1; }
+done
+pkg-config --exists gtk+-3.0 webkit2gtk-4.1 librsvg-2.0 openssl || { echo 'setup_error_tauri_development_modules' >&2; exit 1; }
+python3 - "$aptstate/archives" "$repo/target/desktop-linux-readiness.json" <<'PYTOOLS'
+import json,pathlib,subprocess,sys
+archives=pathlib.Path(sys.argv[1])
+mpv=list(archives.glob('libmpv-dev_*.deb'))
+assert len(mpv)==1, 'setup_error_distro_mpv_archive'
+distro=subprocess.check_output(['dpkg-deb','-f',str(mpv[0]),'Version'],text=True).strip()
+modules={key:subprocess.check_output(['pkg-config','--modversion',key],text=True).strip() for key in ['gtk+-3.0','webkit2gtk-4.1','librsvg-2.0','openssl']}
+pathlib.Path(sys.argv[2]).write_text(json.dumps({'scope':'Linux development checks only; native surface unavailable','cmake':subprocess.check_output(['cmake','--version'],text=True).splitlines()[0],'pkg_config':subprocess.check_output(['pkg-config','--version'],text=True).strip(),'modules':modules,'distro_libmpv_dev':distro,'player_mpv':'Pinned patched upstream 0.41.0 below; distro libmpv does not satisfy API2.5'},indent=2)+'\n')
+print('tauri_development_modules_verified')
+PYTOOLS
 if [[ "$mode" == --install ]]; then
     if [[ ! -d "$source_dir/.git" ]]; then git clone --branch v0.41.0 --depth 1 https://github.com/mpv-player/mpv.git "$source_dir"; fi
     python3 "$repo/scripts/native/verify-mpv-source.py" "$source_dir" "$repo/docs/development/native-dependencies.json" "$repo" --apply

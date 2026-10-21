@@ -953,6 +953,18 @@
       {
         "name": "ffmpeg_7%3a7.1.5-0+deb13u1_amd64.deb",
         "sha256": "8669bc77e55393c14e0dd257ba9a916007cb6da0e1074c9b5e1d53812024f2af"
+      },
+      {
+        "name": "libpkgconf3_1.8.1-4_amd64.deb",
+        "sha256": "85087cd04e57fd4ab7d6e816d348c335047823ab60c78878336b74f07b352ca1"
+      },
+      {
+        "name": "pkgconf-bin_1.8.1-4_amd64.deb",
+        "sha256": "54efef2aef4db5fcb5e0f5b7746465000c6a779b06f3686d0ec3d2a901b20aeb"
+      },
+      {
+        "name": "pkgconf_1.8.1-4_amd64.deb",
+        "sha256": "f1fcad470ca3ac80b4a0f4af6f03cd215089473996b07e508b3ee342bbb11af7"
       }
     ],
     "recipe": "scripts/setup-player-linux.sh",

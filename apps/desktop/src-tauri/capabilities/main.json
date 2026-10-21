@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Local proof player commands for the main window only.",
+  "windows": [
+    "main"
+  ],
+  "webviews": [
+    "main"
+  ],
+  "local": true,
+  "permissions": [
+    "player-controls",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
