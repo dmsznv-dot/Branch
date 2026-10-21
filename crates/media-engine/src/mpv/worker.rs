@@ -216,6 +216,7 @@ fn run(
                 control.registry.retire();
                 let generation = PlaybackGeneration::new();
                 state.open(generation);
+                snapshots.send_replace(state.snapshot.clone());
                 loaded = false;
                 id = None;
                 *control
@@ -239,13 +240,7 @@ fn run(
                         pending = Some(reply);
                     }
                     Err(error) => {
-                        state.snapshot.status = PlayerStatus::Failed;
-                        control
-                            .diagnostics
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .failure = Some(error);
-                        let _ = reply.send(Err(error));
+                        fail(&mut state, &control, &snapshots, &mut Some(reply), error);
                     }
                 }
             }
@@ -284,6 +279,7 @@ fn run(
                         fail(
                             &mut state,
                             &control,
+                            &snapshots,
                             &mut pending,
                             EngineError::UnsupportedMedia,
                         );
@@ -301,7 +297,7 @@ fn run(
                     loaded = false;
                     if error < 0 || reason == 4 {
                         let error = source_error(&control).unwrap_or(EngineError::UnsupportedMedia);
-                        fail(&mut state, &control, &mut pending, error);
+                        fail(&mut state, &control, &snapshots, &mut pending, error);
                     } else if reason == 0 {
                         let _ = state.event(state.snapshot.generation, super::state::Event::Ended);
                     }
@@ -310,7 +306,7 @@ fn run(
             }
         }
         if let Some(error) = source_error(&control).filter(|e| *e != EngineError::Cancelled) {
-            fail(&mut state, &control, &mut pending, error);
+            fail(&mut state, &control, &snapshots, &mut pending, error);
             loaded = false;
         }
         if loaded {
@@ -355,13 +351,25 @@ fn source_error(control: &Control) -> Option<EngineError> {
         .as_ref()
         .and_then(|s| s.error())
 }
-fn fail(state: &mut State, control: &Control, pending: &mut Option<OpenReply>, error: EngineError) {
+fn fail(
+    state: &mut State,
+    control: &Control,
+    snapshots: &watch::Sender<EngineSnapshot>,
+    pending: &mut Option<OpenReply>,
+    error: EngineError,
+) {
     let _ = state.event(state.snapshot.generation, super::state::Event::Failed);
     control
         .diagnostics
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .failure = Some(error);
+    // The error reply must never wake a caller with the previous generation
+    // or a pre-failure status still in its watch receiver. Avoid re-emitting an
+    // unchanged failure on subsequent source-error polls.
+    if *snapshots.borrow() != state.snapshot {
+        snapshots.send_replace(state.snapshot.clone());
+    }
     if let Some(reply) = pending.take() {
         let _ = reply.send(Err(error));
     }
@@ -476,6 +484,67 @@ fn poll(client: &Client, state: &mut State, control: &Control) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_open_publishes_b_before_waking_error_reply() {
+        use std::{
+            future::Future,
+            task::{Context, Poll, Wake, Waker},
+        };
+        struct Observer {
+            current: watch::Receiver<EngineSnapshot>,
+            seen: Mutex<Option<EngineSnapshot>>,
+        }
+        impl Wake for Observer {
+            fn wake(self: Arc<Self>) {
+                *self.seen.lock().unwrap() = Some(self.current.borrow().clone());
+            }
+        }
+        let mut state = State::new();
+        let a = state.snapshot.generation;
+        let (snapshots, current) = watch::channel(state.snapshot.clone());
+        let b = PlaybackGeneration::new();
+        state.open(b);
+        let control = Control {
+            quit: CancellationToken::new(),
+            registry: Arc::new(Registry::default()),
+            diagnostics: Mutex::new(DecodeDiagnostics::default()),
+            returned_endpoint: Mutex::new(None),
+        };
+        let (reply, mut response) = oneshot::channel();
+        let mut pending = Some(reply);
+        let observer = Arc::new(Observer {
+            current,
+            seen: Mutex::new(None),
+        });
+        let waker = Waker::from(observer.clone());
+        let mut context = Context::from_waker(&waker);
+        assert!(matches!(
+            std::pin::Pin::new(&mut response).poll(&mut context),
+            Poll::Pending
+        ));
+        fail(
+            &mut state,
+            &control,
+            &snapshots,
+            &mut pending,
+            EngineError::SourceChanged,
+        );
+        let observed = observer
+            .seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("reply must wake observer synchronously");
+        assert_ne!(a, b);
+        assert_eq!(observed.generation, b);
+        assert_eq!(observed.status, PlayerStatus::Failed);
+        assert_eq!(
+            response.try_recv().unwrap(),
+            Err(EngineError::SourceChanged)
+        );
+        assert!(pending.is_none());
+        drop(snapshots);
+    }
     #[tokio::test]
     async fn owned_open_requests_submit_b_while_a_is_pending() {
         let (tx, mut rx) = mpsc::channel(QUEUE_CAPACITY);

@@ -360,3 +360,43 @@ async fn open_reply_has_published_generation() {
 }
 
 static DIRECT_NATIVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn failed_b_reply_has_published_failed_generation_for_both_failure_paths() {
+    let _serial = DIRECT_NATIVE_LOCK.lock().await;
+    use media_engine::{EngineError, EngineHandle, EngineMode, PlayerStatus, SelectedFile};
+    let engine = EngineHandle::start(EngineMode::Headless).await.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let selected = directory.path().join("B.mp4");
+    for immediate in [true, false] {
+        let a = engine
+            .open(SelectedFile::open(&fixture("h264.mp4")).unwrap())
+            .await
+            .unwrap();
+        std::fs::write(&selected, b"invalid media").unwrap();
+        let b = SelectedFile::open(&selected).unwrap();
+        if immediate {
+            std::fs::write(&selected, b"changed after selection").unwrap();
+        }
+        let expected = if immediate {
+            EngineError::SourceChanged
+        } else {
+            EngineError::UnsupportedMedia
+        };
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            engine.submit_open(b).unwrap().wait(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(error, Err(expected));
+        let failed = engine.subscribe().borrow().clone();
+        assert_ne!(
+            failed.generation, a,
+            "B error reply must not expose A's snapshot"
+        );
+        assert_eq!(failed.status, PlayerStatus::Failed);
+        assert_eq!(engine.diagnostics().failure, Some(expected));
+    }
+    engine.shutdown().await.unwrap();
+}

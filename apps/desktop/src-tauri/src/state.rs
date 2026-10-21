@@ -273,6 +273,8 @@ impl PlayerController {
             return Err(EngineError::Unavailable);
         }
         if serial != self.selection_serial
+            || self.active == Some(snapshot.generation)
+            || (result.is_err() && snapshot.status != PlayerStatus::Failed)
             || result.is_ok_and(|generation| generation != snapshot.generation)
         {
             return Err(EngineError::Cancelled);
@@ -374,6 +376,56 @@ mod selection_tests {
             tracks: vec![],
             decoder: None,
         }
+    }
+    #[test]
+    fn failed_b_cannot_attach_its_name_to_old_a_snapshot() {
+        let mut player = PlayerController::unavailable();
+        let ga = PlaybackGeneration::new();
+        player.active = Some(ga);
+        player.view = PlayerView::snapshot(&snapshot(ga), Some("A.mkv".into()));
+        let b = player.reserve_selection().unwrap();
+        assert!(matches!(
+            player.complete_selection(
+                b,
+                "B.mkv".into(),
+                Err(EngineError::SourceChanged),
+                &snapshot(ga)
+            ),
+            Err(EngineError::Cancelled)
+        ));
+        assert_eq!(player.active, Some(ga));
+        assert_eq!(player.view.basename.as_deref(), Some("A.mkv"));
+    }
+    #[test]
+    fn failed_b_snapshot_retains_b_generation_and_rejects_late_a() {
+        let mut player = PlayerController::unavailable();
+        let a = player.reserve_selection().unwrap();
+        let b = player.reserve_selection().unwrap();
+        let ga = PlaybackGeneration::new();
+        let gb = PlaybackGeneration::new();
+        let mut failed = snapshot(gb);
+        failed.status = PlayerStatus::Failed;
+        assert!(matches!(
+            player.complete_selection(b, "B.mkv".into(), Err(EngineError::SourceChanged), &failed),
+            Err(EngineError::SourceChanged)
+        ));
+        assert_eq!(player.active, Some(gb));
+        assert_eq!(player.view.generation, gb.to_string());
+        assert_eq!(player.view.basename.as_deref(), Some("B.mkv"));
+        assert_eq!(player.view.status, "Failed");
+        assert!(matches!(
+            player.complete_selection(
+                a,
+                "A.mkv".into(),
+                Err(EngineError::SourceChanged),
+                &snapshot(ga)
+            ),
+            Err(EngineError::Cancelled)
+        ));
+        assert!(!player.update(&snapshot(ga)));
+        assert_eq!(player.view.generation, gb.to_string());
+        assert_eq!(player.view.basename.as_deref(), Some("B.mkv"));
+        assert_eq!(player.view.status, "Failed");
     }
     #[test]
     fn stale_a_completion_and_events_cannot_replace_selected_b() {
