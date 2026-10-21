@@ -167,6 +167,67 @@ fn invalid_sources_and_bounds() {
     assert_eq!(&dst[..4], b"tail");
 }
 
+// A FIFO opened read-only without O_NONBLOCK waits for a writer before the
+// descriptor's file-type check can run. Isolate it so a regression is bounded.
+#[cfg(unix)]
+#[test]
+fn fifo_selection_is_rejected_without_waiting_for_writer() {
+    use std::{
+        process::{Command, Stdio},
+        time::Instant,
+    };
+
+    const CHILD_FIFO: &str = "BRANCH_TEST_SELECTED_FIFO";
+    if let Some(path) = std::env::var_os(CHILD_FIFO) {
+        assert!(matches!(
+            SelectedFile::open(&PathBuf::from(path)),
+            Err(EngineError::UnsupportedMedia)
+        ));
+        return;
+    }
+
+    let fixture = Fixture::new(b"regular-file control");
+    assert_eq!(fixture.open().len(), 20);
+    let fifo = fixture.dir.join("selected.mp4");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "fifo_selection_is_rejected_without_waiting_for_writer",
+            "--nocapture",
+        ])
+        .env(CHILD_FIFO, &fifo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "FIFO selection failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("SelectedFile::open waited for a FIFO writer beyond the two-second deadline");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn empty_file_has_a_valid_eof() {
     let fixture = Fixture::new(b"");

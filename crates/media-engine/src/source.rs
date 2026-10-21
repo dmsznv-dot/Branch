@@ -35,6 +35,15 @@ impl SelectedFile {
     pub fn open(path: &Path) -> Result<Self, EngineError> {
         let mut options = OpenOptions::new();
         options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // A read-only FIFO open otherwise waits for a writer before we can
+            // inspect the descriptor. O_NONBLOCK is ignored for regular files;
+            // the descriptor check below still rejects special files if the
+            // pathname changes during selection.
+            options.custom_flags(libc::O_NONBLOCK);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;

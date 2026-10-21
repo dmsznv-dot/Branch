@@ -10,3 +10,6 @@ media-stream = { path = "../media-stream" }
 shared-protocol = { path = "../shared-protocol" }
 tokio-util = { version = "0.7", features = ["rt"] }
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
