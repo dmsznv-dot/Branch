@@ -55,6 +55,19 @@ compiler runtime DLLs if they are redistributed. Resolve implicit dependencies;
 do not fill the list from an assumed Linux closure, Homebrew prefix or PATH.
 The source runner supports CMake, Meson and configure/make recipes; its target
 compilation paths have not yet been run and must be validated before acceptance.
+The toolchain lock requires `compiler`, `compiler_version`, `compiler_sha256`,
+`provenance` and the corresponding C++ fields `cxx_compiler`,
+`cxx_compiler_version`, `cxx_compiler_sha256`, `cxx_provenance`. Both executable
+paths are resolved and their bytes/version checked before use; inherited CC/CXX
+must resolve to those same executables. The selected absolute drivers are forced
+into each build system and recorded by basename/hash/version/provenance in the
+receipt. Recipe and inherited CMake/Meson/compiler overrides are rejected.
+
+Each build requires absent generated `sdk`, `build`, `logs`, `notices`, receipt,
+bundle config, activation and import-definition outputs. Existing outputs cause
+refusal before build writes; the runner never deletes or reuses them. Preserve
+previous outputs separately before beginning another run. Validated checkouts
+under `source` can remain for reuse.
 
 ```sh
 # Current expected result: native_build_blocked:source_lock_incomplete, exit 1.
@@ -142,6 +155,8 @@ locations. If bundler relocation is wrong, correct it and rerun this gate; no
 successful target relocation is claimed here. Unsupported Mach-O/FAT variants
 cannot bypass architecture/import checks by being declared as a notice rather
 than a native binary.
+Windows payload files with duplicate case-folded relative paths are rejected
+before comparing actual files against the reviewed inventory.
 
 An exit0 is **static completeness only** (`runtime_tested:false`). Current target
 inventories reject with `inventory_incomplete`; no actual target bundle has

@@ -196,6 +196,14 @@ class BundleTests(unittest.TestCase):
                 self.update_binary(notice, magic + bytes(64))
                 self.assert_rejected("unlisted_native_binary")
 
+    def test_windows_payload_rejects_actual_case_collisions(self):
+        self.fixture("x86_64-pc-windows-msvc")
+        alias=self.bundle/"LIBMPV-2.DLL"
+        if alias.exists():
+            self.skipTest("filesystem cannot represent two case-colliding files")
+        alias.write_bytes(b"unreviewed alternate payload")
+        self.assert_rejected("bundle_case_collision")
+
 
 if __name__ == "__main__":
     unittest.main()

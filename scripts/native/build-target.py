@@ -49,6 +49,11 @@ def validate_plan(manifest, target):
         for value in source['license_files']:
             relative(value)
         need(source.get('build_system') in ('cmake', 'meson', 'configure') and isinstance(source.get('configure_flags'), list) and source['configure_flags'] and all(isinstance(value, str) for value in source['configure_flags']), 'source_recipe')
+        for flag in source['configure_flags']:
+            option = flag.split('=', 1)[0]
+            cmake_option = flag[2:] if flag.startswith('-D') else flag
+            need(option not in ('CC', 'CXX', '--cc', '--cxx', '--native-file', '--cross-file', '--toolchain')
+                 and not cmake_option.startswith(('CMAKE_C_COMPILER', 'CMAKE_CXX_COMPILER', 'CMAKE_TOOLCHAIN_FILE')), 'compiler_override')
         need(set(source.get('dependencies', [])).issubset(seen), 'dependency_order')
         seen.add(name)
     need(sources['ffmpeg']['revision'] == FFMPEG_COMMIT and sources['ffmpeg']['url'] == 'https://github.com/FFmpeg/FFmpeg.git', 'ffmpeg_pin')
@@ -59,7 +64,11 @@ def validate_plan(manifest, target):
     for item in pin['mpv_patches']:
         need(hashlib.sha256((REPO / relative(item['file'])).read_bytes()).hexdigest() == item['sha256'], 'mpv_patch')
     need({'-Dlibmpv=true', '-Dcplayer=false', '-Dlua=lua5.2', '-Dgl=enabled', '-Dplain-gl=enabled', '-Dauto_features=disabled'}.issubset(sources['mpv']['configure_flags']), 'mpv_flags')
-    need(pin.get('os_floor') and all(pin.get('toolchain', {}).get(key) for key in ('compiler', 'compiler_version', 'provenance')), 'toolchain_provenance')
+    toolchain = pin.get('toolchain', {})
+    need(pin.get('os_floor') and all(isinstance(toolchain.get(key), str) and toolchain[key]
+         for key in ('compiler', 'compiler_version', 'provenance', 'cxx_compiler', 'cxx_compiler_version', 'cxx_provenance')), 'toolchain_provenance')
+    need(all(re.fullmatch(r'[0-9a-f]{64}', toolchain.get(key, ''))
+         for key in ('compiler_sha256', 'cxx_compiler_sha256')), 'toolchain_provenance')
     runtime = pin.get('runtime_files', {})
     need(runtime and {'mpv', 'ffmpeg'}.issubset(runtime) and set(runtime).issubset(sources), 'runtime_file_plan')
     for files in runtime.values():
@@ -87,18 +96,47 @@ def verify_pristine_source(source):
         need(result.returncode == 0, 'source_dirty')
 
 
+def select_toolchain(toolchain, inherited):
+    env, receipt = dict(inherited), {}
+    need(not env.get('CMAKE_TOOLCHAIN_FILE'), 'compiler_override')
+    for variable, key, provenance in [('CC', 'compiler', 'provenance'), ('CXX', 'cxx_compiler', 'cxx_provenance')]:
+        selected = shutil.which(toolchain[key], path=inherited.get('PATH'))
+        need(selected, 'build_tool_missing')
+        executable = Path(selected).resolve()
+        if inherited.get(variable):
+            previous = shutil.which(inherited[variable], path=inherited.get('PATH'))
+            need(previous and Path(previous).resolve() == executable, 'inherited_compiler_mismatch')
+        digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        need(digest == toolchain[key + '_sha256'], 'compiler_hash')
+        version = subprocess.check_output([str(executable), '--version'], text=True).splitlines()[0]
+        need(version == toolchain[key + '_version'], 'compiler_version')
+        env[variable] = str(executable)
+        receipt[variable.lower()] = {'executable': executable.name, 'sha256': digest,
+                                    'version': version, 'provenance': toolchain[provenance]}
+    return env, receipt
+
+
+def prepare_generated_outputs(work):
+    generated = ('sdk', 'build', 'logs', 'notices', 'sdk-receipt.json',
+                 'bundle-config.json', 'activation.sh', 'activation.ps1', 'libmpv-2.def')
+    need(all(not (work / name).exists() and not (work / name).is_symlink()
+             for name in generated), 'generated_outputs_exist')
+    work.mkdir(parents=True, exist_ok=True)
+    prefix, logs, notices = work / 'sdk', work / 'logs', work / 'notices'
+    prefix.mkdir()
+    (work / 'build').mkdir()
+    logs.mkdir()
+    notices.mkdir()
+    return prefix, logs, notices
+
+
 def build_sdk(pin, target, manifest_path, work):
     mac = target == 'aarch64-apple-darwin'
     need((mac and platform.system() == 'Darwin' and platform.machine() == 'arm64') or (not mac and os.name == 'nt'), 'native_host_required')
-    for command in ('git', 'cmake', 'meson', 'ninja', 'make', 'pkg-config', pin['toolchain']['compiler']):
+    for command in ('git', 'cmake', 'meson', 'ninja', 'make', 'pkg-config'):
         need(shutil.which(command), 'build_tool_missing')
-    version = subprocess.check_output([pin['toolchain']['compiler'], '--version'], text=True).splitlines()[0]
-    need(pin['toolchain']['compiler_version'] == version, 'compiler_version')
-    prefix = work / 'sdk'
-    prefix.mkdir(parents=True, exist_ok=True)
-    logs = work / 'logs'
-    logs.mkdir(exist_ok=True)
-    env = dict(os.environ)
+    env, toolchain = select_toolchain(pin['toolchain'], os.environ)
+    prefix, logs, notices = prepare_generated_outputs(work)
     env.update(PKG_CONFIG_PATH=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), PKG_CONFIG_LIBDIR=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), CMAKE_PREFIX_PATH=str(prefix), CMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local')
     env['PATH'] = str(prefix / 'bin') + os.pathsep + env['PATH']
     env['CPPFLAGS'] = '-I' + shlex.quote(str(prefix / 'include'))
@@ -109,16 +147,15 @@ def build_sdk(pin, target, manifest_path, work):
         env['MACOSX_DEPLOYMENT_TARGET'] = pin['os_floor']
     else:
         need(env.get('MSYSTEM') == 'MINGW64', 'mingw64_environment_required')
-        need(subprocess.check_output([pin['toolchain']['compiler'], '-dumpmachine'], text=True).strip() == 'x86_64-w64-mingw32', 'compiler_target')
+        for variable in ('CC', 'CXX'):
+            need(subprocess.check_output([env[variable], '-dumpmachine'], text=True).strip() == 'x86_64-w64-mingw32', 'compiler_target')
     receipts = {}
-    notices = work / 'notices'
-    notices.mkdir(exist_ok=True)
     for name in pin['build_order']:
         item = pin['sources'][name]
         source = work / 'source' / name
         build = work / 'build' / name
         source.parent.mkdir(exist_ok=True)
-        build.mkdir(parents=True, exist_ok=True)
+        build.mkdir()
         log = logs / (name + '.log')
         if not source.exists():
             run(['git', 'init', str(source)], work, env, log)
@@ -140,15 +177,16 @@ def build_sdk(pin, target, manifest_path, work):
             run(['meson', 'install', '-C', str(build)], work, env, log)
         elif item['build_system'] == 'cmake':
             options = ['-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=' + pin['os_floor']] if mac else ['-G', 'Ninja']
-            run(['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DBUILD_SHARED_LIBS=ON', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', *options, *flags], work, env, log)
+            run(['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DBUILD_SHARED_LIBS=ON', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', *options, *flags, '-DCMAKE_C_COMPILER=' + env['CC'], '-DCMAKE_CXX_COMPILER=' + env['CXX']], work, env, log)
             run(['cmake', '--build', str(build), '--parallel', '3'], work, env, log)
             run(['cmake', '--install', str(build)], work, env, log)
         else:
-            run(['sh', str(source / 'configure'), '--prefix=' + prefix.as_posix(), *flags], build, env, log)
+            drivers = ['--cc=' + env['CC'], '--cxx=' + env['CXX']] if name == 'ffmpeg' else []
+            run(['sh', str(source / 'configure'), '--prefix=' + prefix.as_posix(), *flags, *drivers], build, env, log)
             run(['make', '-j3'], build, env, log)
             run(['make', 'install'], build, env, log)
         component_notices = notices / name
-        component_notices.mkdir(exist_ok=True)
+        component_notices.mkdir()
         for license_file in item['license_files']:
             shutil.copy2(source / license_file, component_notices / Path(license_file).name)
         with (component_notices / (name + '-source.tar')).open('wb') as archive:
@@ -170,7 +208,7 @@ def build_sdk(pin, target, manifest_path, work):
         need(len(dlls) == 1, 'mpv_dll_name')
         run(['gendef', str(dlls[0])], work, env, logs / 'import-library.log')
         run(['lib.exe', '/nologo', '/machine:x64', '/def:' + str(work / 'libmpv-2.def'), '/out:' + str(prefix / 'lib/mpv.lib')], work, env, logs / 'import-library.log')
-    evidence = {'status': 'sdk_built_distribution_unreviewed', 'target': target, 'os': platform.system() + ' ' + platform.release(), 'compiler': version, 'os_floor': pin['os_floor'], 'sources': receipts, 'artifacts': artifacts, 'mpv_patches': pin['mpv_patches']}
+    evidence = {'status': 'sdk_built_distribution_unreviewed', 'target': target, 'os': platform.system() + ' ' + platform.release(), 'toolchain': toolchain, 'os_floor': pin['os_floor'], 'sources': receipts, 'artifacts': artifacts, 'mpv_patches': pin['mpv_patches']}
     (work / 'sdk-receipt.json').write_text(json.dumps(evidence, indent=2) + '\n')
     # No paths are emitted in the shareable receipt. Activation is local only.
     resources = {str(path): 'licenses/' + path.relative_to(notices).as_posix() for path in notices.rglob('*') if path.is_file()}

@@ -174,7 +174,7 @@ def inspect_bundle(target, bundle, manifest):
     windows = target == "x86_64-pc-windows-msvc"
     for artifact in artifacts:
         name = relative_path(artifact.get("file"))
-        key = name.lower() if windows else name
+        key = name.casefold() if windows else name
         require(key not in files, "inventory_duplicate")
         files[key] = artifact
         path = inside(root, name)
@@ -193,13 +193,15 @@ def inspect_bundle(target, bundle, manifest):
         require(path.resolve().is_relative_to(root), "bundle_escape")
         if path.is_file():
             name = path.relative_to(root).as_posix()
-            actual_files.add(name.lower() if windows else name)
+            key = name.casefold() if windows else name
+            require(key not in actual_files, "bundle_case_collision")
+            actual_files.add(key)
     require(actual_files == set(files), "unlisted_bundle_file")
     entry = relative_path(pin.get("entrypoint"))
     require(entry in binaries, "entrypoint_missing")
     require({"mpv", "ffmpeg"}.issubset({a.get("component") for a in artifacts if a.get("kind") == "binary"}), "required_library_missing")
     for name in pin.get("required_files", []):
-        require((name.lower() if windows else name) in files, "required_library_missing")
+        require((name.casefold() if windows else name) in files, "required_library_missing")
     sources = pin.get("sources", {})
     components = {a.get("component") for a in artifacts if a.get("kind") == "binary"} - {"application"}
     require(components and components.issubset(sources), "license_inventory")
@@ -211,14 +213,14 @@ def inspect_bundle(target, bundle, manifest):
         require(required_notices and source.get("source_offer"), "license_inventory")
         for notice in [*required_notices, source["source_offer"]]:
             key = relative_path(notice)
-            require((key.lower() if windows else key) in files and inside(root, key).is_file(), "license_inventory")
+            require((key.casefold() if windows else key) in files and inside(root, key).is_file(), "license_inventory")
     if windows:
         runtime = pin.get("webview2", {})
         require(runtime.get("mode") in ("system_verified", "offline_installer", "fixed_runtime"), "webview2_unverified")
         if runtime["mode"] == "system_verified":
             require(runtime.get("version") and runtime.get("verification"), "webview2_unverified")
         else:
-            require(runtime.get("files") and all(path.lower() in files for path in runtime["files"]), "webview2_unverified")
+            require(runtime.get("files") and all(path.casefold() in files for path in runtime["files"]), "webview2_unverified")
     graph = pin.get("dependency_graph", {})
     require(isinstance(graph, dict) and set(graph) == set(binaries), "import_graph_mismatch")
     dlls = {}
