@@ -473,7 +473,9 @@ async fn reader_revoked(mut permission: watch::Receiver<Option<MediaPermit>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared_protocol::{ClockEpochId, HostTime, MediaDescriptor, MediaId, WireU64};
+    use shared_protocol::{
+        ClockEpochId, HostTime, MediaDescriptor, MediaFingerprint, MediaId, WireU64,
+    };
     use std::{future::Future, path::PathBuf, task::Poll};
     use sync_engine::ManualClock;
 
@@ -609,6 +611,7 @@ mod tests {
             media_id,
             size_bytes: WireU64::new(10),
             duration_ms: WireU64::new(0),
+            fingerprint: MediaFingerprint::from_bytes([0; 32]),
         };
         let clock = Arc::new(ManualClock::new(HostTime {
             epoch: ClockEpochId::new(),

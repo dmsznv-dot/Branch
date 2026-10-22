@@ -3,6 +3,7 @@ use media_stream::{
     StreamError,
 };
 use room_server::{CreatedRoom, MediaPermit, RoomError, RoomHandle};
+use sha2::Digest;
 use shared_protocol::{ClockEpochId, HostTime, MediaDescriptor, MediaId, WireU64};
 use std::{
     fs::{self, FileTimes, OpenOptions},
@@ -61,6 +62,10 @@ async fn descriptor_and_bounded_reads() {
     let descriptor = source.descriptor(1234);
     assert_eq!(descriptor.size_bytes.get(), bytes.len() as u64);
     assert_eq!(descriptor.duration_ms.get(), 1234);
+    assert_eq!(
+        *descriptor.fingerprint.as_bytes(),
+        <[u8; 32]>::from(sha2::Sha256::digest(&bytes))
+    );
     let (created, _) = room(descriptor);
     let auth = permit(&created, &source).await;
     assert_eq!(
@@ -90,6 +95,20 @@ async fn descriptor_and_bounded_reads() {
         source.read_chunk(&auth, u64::MAX, 1).await,
         Err(StreamError::InvalidOffset)
     ));
+}
+
+#[test]
+fn same_size_files_have_distinct_content_fingerprints() {
+    let first = Fixture::new(b"same length A");
+    let second = Fixture::new(b"same length B");
+    assert_eq!(
+        first.open().descriptor(0).size_bytes,
+        second.open().descriptor(0).size_bytes
+    );
+    assert_ne!(
+        first.open().descriptor(0).fingerprint,
+        second.open().descriptor(0).fingerprint
+    );
 }
 
 #[tokio::test]

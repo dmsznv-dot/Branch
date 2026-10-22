@@ -9,6 +9,7 @@ pub fn media() -> MediaDescriptor {
         media_id: MediaId::new(),
         size_bytes: WireU64::new(100_000),
         duration_ms: WireU64::new(10_000),
+        fingerprint: MediaFingerprint::from_bytes([2; 32]),
     }
 }
 pub fn setup() -> (CreatedRoom, Arc<ManualClock>) {

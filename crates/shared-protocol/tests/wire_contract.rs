@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use shared_protocol::{
     ClockEpochId, CommandEnvelope, CommandId, ControlMode, ErrorCode, HostTime, MediaDescriptor,
-    MediaId, ParticipantId, Playback, PlaybackCommand, PlaybackStatus, RoomId, RoomSnapshot, Speed,
-    WireU64,
+    MediaFingerprint, MediaId, ParticipantId, Playback, PlaybackCommand, PlaybackStatus, RoomId,
+    RoomSnapshot, Speed, WireU64,
 };
 
 fn roundtrip<T>(value: T)
@@ -21,6 +21,7 @@ fn snapshot() -> RoomSnapshot {
             media_id: MediaId::new(),
             size_bytes: WireU64::new(u64::MAX),
             duration_ms: WireU64::new(9_007_199_254_740_993),
+            fingerprint: MediaFingerprint::from_bytes([0xAB; 32]),
         },
         revision: WireU64::new(42),
         playback: Playback {
@@ -88,6 +89,23 @@ fn wire_u64_rejects_noncanonical() {
             "accepted {bad}"
         );
     }
+}
+
+#[test]
+fn media_fingerprint_is_canonical_and_redacted_from_debug() {
+    let fingerprint = MediaFingerprint::from_bytes([0xAB; 32]);
+    assert_eq!(
+        serde_json::to_string(&fingerprint).unwrap(),
+        format!("\"{}\"", "ab".repeat(32))
+    );
+    assert_eq!(
+        serde_json::from_str::<MediaFingerprint>(&serde_json::to_string(&fingerprint).unwrap())
+            .unwrap(),
+        fingerprint
+    );
+    assert!(serde_json::from_str::<MediaFingerprint>(&format!("\"{}\"", "AB".repeat(32))).is_err());
+    assert!(serde_json::from_str::<MediaFingerprint>("\"short\"").is_err());
+    assert!(!format!("{fingerprint:?}").contains(&"ab".repeat(32)));
 }
 
 #[test]

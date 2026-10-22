@@ -239,6 +239,23 @@ def build_lua_make(source, build, prefix, env, flags, log):
     need('ltests.o' in core_objects, 'lua_makefile')
     core_objects.remove('ltests.o')
 
+    # Lua 5.2.4's pinned upstream makefile omits objects needed by mpv:
+    # lctype.o defines luai_ctype_, while lbitlib.o and lcorolib.o provide
+    # luaopen_bit32 and luaopen_coroutine respectively.
+    need((source / 'lctype.c').is_file(), 'lua_ctype_source_missing')
+    if 'lctype.o' not in core_objects:
+        core_objects.append('lctype.o')
+    lib_match = re.search(r'(?m)^LIB_O=\s*((?:[^\n]*\\\n)*[^\n]*)', text)
+    need(lib_match is not None, 'lua_makefile')
+    lib_objects = re.sub(r'\\\n\s*', ' ', lib_match.group(1)).split()
+    for object_name, source_name, code in (
+        ('lbitlib.o', 'lbitlib.c', 'lua_bitlib_source_missing'),
+        ('lcorolib.o', 'lcorolib.c', 'lua_corolib_source_missing'),
+    ):
+        need((source / source_name).is_file(), code)
+        if object_name not in lib_objects:
+            lib_objects.append(object_name)
+
     staged = build / 'lua-source'
     staged.mkdir()
     for path in source.iterdir():
@@ -251,7 +268,8 @@ def build_lua_make(source, build, prefix, env, flags, log):
     command = [make, '-C', str(staged), '-f', 'makefile', '-j3', 'a',
                'CC=' + env['CC'], 'AR=ar rcu', 'RANLIB=ranlib',
                'TESTS=', 'MYCFLAGS=' + mycflags,
-               'CORE_O=' + ' '.join(core_objects)]
+               'CORE_O=' + ' '.join(core_objects),
+               'LIB_O=' + ' '.join(lib_objects)]
     run(command, build, env, log)
 
     library = staged / 'liblua.a'

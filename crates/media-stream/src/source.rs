@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs::Metadata,
+    io::Read,
     path::Path,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
@@ -11,7 +12,8 @@ use std::{
 
 use bytes::Bytes;
 use room_server::MediaPermit;
-use shared_protocol::{MediaDescriptor, MediaId, ParticipantId, RoomId, WireU64};
+use sha2::{Digest, Sha256};
+use shared_protocol::{MediaDescriptor, MediaFingerprint, MediaId, ParticipantId, RoomId, WireU64};
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
@@ -29,6 +31,7 @@ pub struct SelectedMedia {
     media_id: MediaId,
     size: u64,
     modified: SystemTime,
+    fingerprint: MediaFingerprint,
     changed: AtomicBool,
 }
 
@@ -41,13 +44,29 @@ impl SelectedMedia {
         if !metadata.is_file() {
             return Err(StreamError::NotRegularFile);
         }
+        let modified = metadata.modified()?;
+        let mut reader = file.try_clone()?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        let after = file.metadata()?;
+        if after.len() != metadata.len() || after.modified()? != modified {
+            return Err(StreamError::MediaChanged);
+        }
         Ok(Self {
             #[cfg(feature = "test-support")]
             probe: None,
             file: Mutex::new(File::from_std(file)),
             media_id,
             size: metadata.len(),
-            modified: metadata.modified()?,
+            modified,
+            fingerprint: MediaFingerprint::from_bytes(hasher.finalize().into()),
             changed: AtomicBool::new(false),
         })
     }
@@ -63,6 +82,7 @@ impl SelectedMedia {
             media_id: self.media_id,
             size_bytes: WireU64::new(self.size),
             duration_ms: WireU64::new(duration_ms),
+            fingerprint: self.fingerprint,
         }
     }
 

@@ -1111,37 +1111,37 @@
           {
             "file": "lib/libmpv.2.dylib",
             "component": "mpv",
-            "sha256": "9fabd4fc405205eece0b2fe594a15db12098f5f0e48083054e2a8d7cc3960946"
+            "sha256": "50ff9d0a41e91e948e3f7c7977961c7e544aa511d4c1f4ca06069c3d1b23c695"
           },
           {
             "file": "lib/libavcodec.62.dylib",
             "component": "ffmpeg",
-            "sha256": "9a8d5a59a1589c3cc1bc05eb71c740f22a68d0fe861018f318219c775845d137"
+            "sha256": "1b0703510ff8c9b5b741847c611405551bb7284313d02f22abb709fdf57ceee5"
           },
           {
             "file": "lib/libavfilter.11.dylib",
             "component": "ffmpeg",
-            "sha256": "d67b51ab26d28519607024584279f75e9db0078f872dbac579108540de79c7fd"
+            "sha256": "d08d99842cdf2c53cc91d88067c906eb5b54614aaf24c79e48cd15375b32e9f2"
           },
           {
             "file": "lib/libavformat.62.dylib",
             "component": "ffmpeg",
-            "sha256": "ab9c2dca0db5821290777a7f913b6a544a1c1d1820bb78f3d51c3f080f399b21"
+            "sha256": "06d69cf23f1adc9b6ca5b9024f011db303f804189c88370dc15140620bb2f5f8"
           },
           {
             "file": "lib/libavutil.60.dylib",
             "component": "ffmpeg",
-            "sha256": "56360b917738dc80dcb969be1174043f06e7e7b513ffe275a90e4db299f81314"
+            "sha256": "76be29c91914b3adea018f2fc41aa86091764eebc5c4888d371fd40dec5bf30c"
           },
           {
             "file": "lib/libswresample.6.dylib",
             "component": "ffmpeg",
-            "sha256": "75220220adc2811835397848aa4047b72d0686b5e4219fea48222ce8ed35d647"
+            "sha256": "5186024d5abe58e57c03bcf4894e79c58a39cd845fd1663e890ed3c4806ccd0a"
           },
           {
             "file": "lib/libswscale.9.dylib",
             "component": "ffmpeg",
-            "sha256": "9668f97359e24f3923a706b818732b72948479bd85e9293f79e9bc5a8a43b6ab"
+            "sha256": "6d19f0b61a6ad4f54d398cef7b6ef5d7463646b3cd53fc6c5de07d8715088a9d"
           },
           {
             "file": "lib/libdav1d.7.dylib",
@@ -1151,45 +1151,46 @@
           {
             "file": "lib/libfreetype.6.dylib",
             "component": "freetype",
-            "sha256": "3710df63a49c454fac8eb3f03c1e3a68f8a48744d562c05a4fe7377a8894f6ec"
+            "sha256": "1e6cb2b71d17c5563b85b6eddda2683e04eeb83145470d195a17997d2f1b0241"
           },
           {
             "file": "lib/libfribidi.0.dylib",
             "component": "fribidi",
-            "sha256": "4126644bbd4501a3e833673497b9444ef838af9d84e43182a0c236f704125b1e"
+            "sha256": "5adfc6135b55a2ad77557051423df4194708078e4f98478f35982767d0eb6dd5"
           },
           {
             "file": "lib/libharfbuzz.0.dylib",
             "component": "harfbuzz",
-            "sha256": "e3ef56d53cda9fac5825f600f37408f01190a5961dfb6ea0df6f34171a5c43e3"
+            "sha256": "d1a87075bdc69b76e2639ee34082cae4ef139e98a32c4ca608f0f0578a9234f2"
           },
           {
             "file": "lib/libass.9.dylib",
             "component": "libass",
-            "sha256": "fd9bdb20e6c17c326121e747cfa53a15cec78f4a9587b8099a345b65e553e2c6"
+            "sha256": "e029c7f796a015efd6930e6d88ba9f95b601b1129a958e01cf28fae65dea358d"
           },
           {
             "file": "lib/libplacebo.360.dylib",
             "component": "libplacebo",
-            "sha256": "a815abb0c2458f53fbb8e728c5ec5b7a1b72ee47b0c896ba43d09e451a869060"
+            "sha256": "dce81705425c0a48631503ed7a2047e0aab7007760e5f132f9d39cdf50d554f6"
           }
         ],
         "app": {
           "path": "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Branch.app",
           "executable": "Contents/MacOS/desktop",
-          "executable_sha256": "3b75b868b7bb26f0d6d9e55d3632efa316d9f2d5e9e42ea05aca5d9c3027b9f7",
-          "size_bytes": 348444809,
+          "executable_sha256": "d511f59865cb418f265a73bc0f028ead7af0c2b86484794b97f510dc2dc70409",
+          "size_bytes": 353827977,
           "architecture": "arm64",
           "bundled_runtime_dylibs": 13,
           "license_resource_files": 46,
-          "static_import_check": "passed with otool: @rpath dependencies resolve inside Contents/Frameworks; no developer-prefix paths",
+          "static_import_check": "passed with otool: 14 arm64 binaries and 109 imports; all @rpath dependencies resolve inside Contents/Frameworks; remaining imports use /System/Library or /usr/lib; no developer-prefix imports",
           "device_tested": false
         },
         "javascript_toolchain": {
           "node": "v24.21.0",
           "npm": "12.2.0",
           "package_engine_warning": "apps/desktop declares Node 24.19.0 and npm 11.9.0; production build succeeded with these installed newer versions."
-        }
+        },
+        "sdk_build": "scripts/native/build-macos.sh: native_sdk_built_distribution_unreviewed"
       },
       "required_files": [],
       "sources": {

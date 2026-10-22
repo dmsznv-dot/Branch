@@ -40,6 +40,10 @@ fn begin_close(window: &Window) {
     let window = window.clone();
     tauri::async_runtime::spawn(async move {
         let state = window.state::<AppState>();
+        let watch_session = state.watch_session.lock().await.take();
+        if let Some(commands::DesktopWatchSession::Host { session: host, .. }) = watch_session {
+            host.close().await;
+        }
         let engine = state.controller.lock().await.engine.take();
         let surface = state
             .surface
@@ -84,6 +88,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::choose_media,
+            commands::watch_create,
+            commands::watch_join,
+            commands::watch_playback,
+            commands::watch_leave,
+            commands::watch_status,
             commands::player_command,
             commands::set_fullscreen,
             commands::player_snapshot
@@ -129,6 +138,8 @@ pub fn run() {
                 closing: AtomicBool::new(false),
                 close: tokio::sync::watch::channel(false).0,
                 chooser: AtomicBool::new(false),
+                selected_path: Mutex::new(None),
+                watch_session: tokio::sync::Mutex::new(None),
             });
             let webview = tauri::webview::WebviewBuilder::new(
                 "main",

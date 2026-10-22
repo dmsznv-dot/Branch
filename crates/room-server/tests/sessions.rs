@@ -31,6 +31,28 @@ async fn revoke_invite_keeps_existing_session() {
         Err(RoomError::Forbidden)
     ));
 }
+
+#[tokio::test]
+async fn guest_must_select_the_same_video_bytes_before_joining() {
+    let (c, _) = setup();
+    let expected = initial(&c).await.media.fingerprint;
+    assert!(matches!(
+        c.room
+            .join_with_media(
+                &c.invitation,
+                "guest",
+                MediaFingerprint::from_bytes([0xEE; 32])
+            )
+            .await,
+        Err(RoomError::MediaMismatch)
+    ));
+    let joined = c
+        .room
+        .join_with_media(&c.invitation, "guest", expected)
+        .await
+        .unwrap();
+    assert_eq!(joined.snapshot.media.fingerprint, expected);
+}
 #[tokio::test]
 async fn expired_session_cannot_be_revived() {
     let (c, clock) = setup();
@@ -91,6 +113,18 @@ async fn tokens_are_distinct_random_redacted_secrets() {
     assert_ne!(c.host_session.expose(), guest.session.expose());
     assert_ne!(c.host_session.expose(), c.invitation.expose());
 }
+#[test]
+fn invitation_and_session_tokens_round_trip_canonically() {
+    let (created, _) = setup();
+    let invitation = room_server::InvitationToken::parse(created.invitation.expose()).unwrap();
+    assert_eq!(invitation.expose(), created.invitation.expose());
+    assert!(room_server::InvitationToken::parse("short").is_err());
+    assert!(
+        room_server::InvitationToken::parse(&format!("{}=", created.invitation.expose())).is_err()
+    );
+    assert!(room_server::InvitationToken::parse(&format!("!{}", "A".repeat(42))).is_err());
+}
+
 #[tokio::test]
 async fn foreign_session_has_no_authority() {
     let (c, clock) = setup();

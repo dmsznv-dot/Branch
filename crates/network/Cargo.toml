@@ -1,0 +1,29 @@
+[package]
+name = "network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+async-trait = "0.1"
+base64 = "0.22"
+futures-util = "0.3"
+hyper-util = { version = "0.1", default-features = false, features = ["server", "server-auto", "service", "tokio", "http1"] }
+rcgen = "0.14.10"
+room-server = { path = "../room-server" }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+serde.workspace = true
+serde_json.workspace = true
+shared-protocol = { path = "../shared-protocol" }
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "=0.30.0", features = ["rustls-tls-webpki-roots"] }
+url.workspace = true
+
+[[bin]]
+name = "signal-server"
+path = "src/bin/signal-server.rs"

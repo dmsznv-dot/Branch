@@ -86,6 +86,7 @@ fn snapshot() -> RoomSnapshot {
             media_id: MediaId::parse("11111111-1111-4111-8111-111111111111").unwrap(),
             size_bytes: WireU64::new(1),
             duration_ms: WireU64::new(200_000),
+            fingerprint: shared_protocol::MediaFingerprint::from_bytes([1; 32]),
         },
         revision: WireU64::new(10),
         playback: playback(),

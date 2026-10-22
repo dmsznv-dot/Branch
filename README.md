@@ -1,31 +1,40 @@
-# Branch — watch together prototype
+# Branch
 
-An in-memory room authority, deterministic playback synchronization and a local
-adapter that streams original bytes from one explicitly selected file. Rooms
-support five participants and `everyone` / `host-only` playback controls.
+Branch is a desktop video player with watch rooms. One person hosts a room from
+the app; everyone opens their own local copy of the same video. Branch checks
+the complete files with SHA-256 and synchronizes playback commands and room
+state. Video files are not uploaded or sent to other participants.
 
-For managed-cloud setup, run `./scripts/setup-core.sh`, then activate the
-workspace-local toolchain as shown in [core development](docs/development/core.md).
+## Download
 
-```sh
-cargo test --locked -p shared-protocol -p sync-engine -p room-server -p media-stream --all-features
-cargo run --locked -p media-stream --bin core-harness -- --file /path/to/selected.mp4 --duration-ms 120000
-```
+The current experimental macOS Apple silicon build is published on the
+[GitHub Releases page](https://github.com/dmsznv-dot/Branch/releases). See the
+[macOS installation guide](docs/development/INSTALL-macOS-ARM64.md) for setup
+and first launch. This build is for ARM64 Macs and requires macOS 11 or newer.
+An Intel Mac build is not provided.
 
-The local harness prints `room-created`, then `range-server-ready` only after an
-internal authenticated HTTP HEAD succeeds. Press Ctrl+C for `room-closed` and
-joined shutdown. It prints no file path, capability or playable URL. This is a
-local development check; no external service is started.
+## Create a watch room
 
-See [core development](docs/development/core.md) for environment setup, the full
-validation commands and acceptance limits. WebRTC/TURN transport and real decoder synchronization remain follow-up
-projects C/D. The B1 local libmpv/Tauri proof is implemented; target delivery
-and native acceptance remain blocked. The current tests do not establish native playback or a real-network
-synchronization result of ≤250 ms.
+1. Open the video file in Branch and choose **Create server** in the watch
+   panel.
+2. Share the invitation link with guests.
+3. Each guest opens the exact same video file in Branch and joins with the
+   invitation.
 
-The [native player proof (B1)](docs/development/native-player.md) includes a typed
-selected-file engine, native surface hosts and a minimal local desktop UI. See
-[native validation](docs/development/native-player-validation.md) for observed
-Linux checks, blocked target source/bundle inventories, and the mandatory macOS
-ARM64/Windows 10/11 runtime and clean-machine gates. The application is not yet a
-finished shared-viewing MVP; B2/C/D follow only after the required gates.
+The host's Branch app runs the room server on that Mac. It attempts to open TCP
+port 8787 on the router using UPnP and discover the public IPv4 address. No
+separate server program or account is required. Direct hosting depends on the
+router allowing UPnP and the internet connection having a reachable public
+address; CGNAT or a router with UPnP disabled can prevent hosting. macOS may ask
+whether to allow incoming connections.
+
+## Project status
+
+This is an experimental preview. The macOS app was built locally for Apple
+silicon, but the release is ad-hoc signed and is not notarized by Apple.
+Network hosting across different internet connections and device acceptance
+have not been verified. The dependency/license inventory is still incomplete;
+review the release notes and native dependency record before redistribution.
+
+For development setup and architecture notes, see
+[docs/development](docs/development/).

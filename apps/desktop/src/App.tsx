@@ -1,5 +1,5 @@
 import { useEffect,useRef,useState } from 'react';
-import { acceptEvent,api,initialView,time,togglePlayback,type Command,type PlayerView } from './player';
+import { acceptEvent,api,initialView,time,togglePlayback,type Command,type PlayerView,type WatchAction } from './player';
 const statuses:Record<PlayerView['status'],string>={Idle:'Откройте фильм',Loading:'Загрузка',Paused:'Пауза',Playing:'Воспроизведение',Buffering:'Буферизация',Ended:'Ended · Просмотр завершён',Failed:'Не удалось открыть фильм'};
 export function PlayerPanel({view,send=async()=>{},fullscreen=()=>{}}:{view:PlayerView;send?:(command:Command)=>Promise<void>;fullscreen?:()=>void}) {
  const duration=view.duration_ms===null?null:BigInt(view.duration_ms),position=BigInt(view.position_ms);
@@ -20,6 +20,29 @@ export function PlayerPanel({view,send=async()=>{},fullscreen=()=>{}}:{view:Play
   <p className="file-name">{view.basename}</p>
  </section>;
 }
+function WatchPanel({enabled,clearError}:{enabled:boolean;clearError:()=>void}) {
+ const [status,setStatus]=useState<'host'|'guest'|'idle'|'disconnected'>('idle'),[invite,setInvite]=useState(''),[share,setShare]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
+ useEffect(()=>{void api.watchStatus().then(setStatus).catch(()=>{});},[]);
+ async function run(action:()=>Promise<unknown>,success:string,failure='Не удалось подключиться. Проверьте приглашение и выбранный видеофайл.'){clearError();setBusy(true);setMessage('');try{const result=await action();if(typeof result==='string')setShare(result);setStatus(await api.watchStatus());setMessage(success);}catch(error){setMessage(typeof error==='string'?error:failure);}finally{setBusy(false);}}
+ async function copy(){try{await navigator.clipboard.writeText(share);setMessage('Приглашение скопировано');}catch{setMessage('Выделите и скопируйте приглашение вручную');}}
+ return <section className="watch-room" aria-label="Совместный просмотр">
+  <h2>Совместный просмотр</h2>
+  {status==='idle'?<>
+   <button disabled={!enabled||busy} onClick={()=>void run(()=>api.watchCreate(),'Сервер создан. Скопируйте ссылку и отправьте гостям.','Не удалось открыть сервер автоматически. Проверьте, что на роутере включён UPnP и провайдер выдаёт публичный IP без CGNAT.')}>{busy?'Создаём сервер…':'Создать сервер'}</button>
+   <label>Приглашение от ведущего<textarea placeholder="Вставьте ссылку branch-watch://…" value={invite} onChange={e=>setInvite(e.target.value)}/></label>
+   <button disabled={!enabled||busy||!invite} onClick={()=>void run(()=>api.watchJoin(invite),'Вы подключены')}>Подключиться как гость</button>
+   <p className="room-help">Branch сама запускает сервер и открывает порт на поддерживаемом роутере. Если macOS спросит о входящих подключениях, разрешите их. Перед подключением все открывают один и тот же видеофайл.</p>
+  </>:status==='disconnected'?<>
+   <p role="alert">Соединение с комнатой потеряно</p>
+   <button onClick={()=>void run(()=>api.watchLeave(),'Комната закрыта')}>Закрыть комнату</button>
+  </>:<>
+   <p role="status">{status==='host'?'Вы ведущий комнаты':'Вы подключены к комнате'}</p>
+   {status==='host'&&share&&<><textarea aria-label="Ссылка-приглашение" readOnly value={share}/><button onClick={()=>void copy()}>Скопировать приглашение</button></>}
+   <button onClick={()=>void run(()=>api.watchLeave(),'Вы вышли из комнаты')}>Завершить совместный просмотр</button>
+  </>}
+  {message&&<p className="room-help" role="status">{message}</p>}
+ </section>;
+}
 export default function App(){
  const [view,setView]=useState(initialView),[shown,setShown]=useState(true),[error,setError]=useState(''),[choosing,setChoosing]=useState(false),[full,setFull]=useState(false);
  const selection=useRef(0),accepted=useRef(0);
@@ -30,7 +53,13 @@ export default function App(){
   return ()=>{disposed=true;unlisten?.();};
  },[]);
  async function choose(){const serial=++selection.current;setChoosing(true);setError('');try{const next=await api.choose();if(next&&serial>=accepted.current){accepted.current=serial;setView(next);}}catch{if(serial===selection.current){setError('Не удалось открыть фильм');try{const next=await api.snapshot();if(serial===selection.current)setView(next);}catch{/* stable public text only */}}}finally{if(serial===selection.current)setChoosing(false);}}
- async function send(command:Command){try{await api.command(view.generation,command);setError('');}catch{setError('Команда недоступна');}}
+ async function send(command:Command){try{if(await api.watchStatus()!=='idle'){
+   let action:WatchAction|undefined;
+   if(command.type==='SetPaused')action=command.value?{type:'pause'}:{type:'play'};
+   if(command.type==='SeekToMs')action={type:'seek',positionMs:command.value};
+   if(command.type==='SetSpeed')action={type:'setSpeed',speed:command.value};
+   if(action){await api.watchCommand(action);setError('');return;}
+  }await api.command(view.generation,command);setError('');}catch{setError('Команда недоступна');}}
  async function fullscreen(){try{await api.fullscreen(!full);setFull(!full);}catch{setError('Полноэкранный режим недоступен');}}
  return <main className={view.unavailable?'watch unavailable':'watch'}>
   <header><div><h1>{view.basename??'Branch'}</h1><p>Локальный просмотр</p></div><button disabled={view.unavailable} aria-busy={choosing} onClick={()=>void choose()}>Открыть фильм</button></header>
@@ -38,5 +67,6 @@ export default function App(){
   <div className="proof"><span role="status">{statuses[view.status]}</span><button aria-expanded={shown} onClick={()=>setShown(!shown)}>{shown?'Скрыть панель':'Показать панель'}</button></div>
   {error&&<p className="error" role="alert">{error}</p>}
   {shown&&<PlayerPanel view={view} send={send} fullscreen={()=>void fullscreen()}/>}
+  <WatchPanel enabled={!!view.basename&&!view.unavailable} clearError={()=>setError('')}/>
  </main>;
 }

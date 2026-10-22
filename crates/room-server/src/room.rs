@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use shared_protocol::{
-    CommandEnvelope, CommandId, ControlMode, HostTime, MediaDescriptor, MediaId, ParticipantId,
-    Playback, PlaybackStatus, RoomId, RoomSnapshot, Speed, WireU64,
+    CommandEnvelope, CommandId, ControlMode, HostTime, MediaDescriptor, MediaFingerprint, MediaId,
+    ParticipantId, Playback, PlaybackStatus, RoomId, RoomSnapshot, Speed, WireU64,
 };
 use sync_engine::Clock;
 use tokio::sync::{Mutex, watch};
@@ -175,6 +175,27 @@ impl RoomHandle {
         invitation: &InvitationToken,
         name: &str,
     ) -> Result<JoinedRoom, RoomError> {
+        self.join_matching_media(invitation, name, None).await
+    }
+
+    /// Join only if the guest's locally selected file has exactly the same
+    /// SHA-256 fingerprint as the file already selected by the host.
+    pub async fn join_with_media(
+        &self,
+        invitation: &InvitationToken,
+        name: &str,
+        fingerprint: MediaFingerprint,
+    ) -> Result<JoinedRoom, RoomError> {
+        self.join_matching_media(invitation, name, Some(fingerprint))
+            .await
+    }
+
+    async fn join_matching_media(
+        &self,
+        invitation: &InvitationToken,
+        name: &str,
+        fingerprint: Option<MediaFingerprint>,
+    ) -> Result<JoinedRoom, RoomError> {
         self.clock.now()?;
         validate_name(name)?;
         // Secure entropy is obtained before entering the authority lock.
@@ -188,6 +209,9 @@ impl RoomHandle {
             .is_some_and(|d| matches(d, &invitation.digest()))
         {
             return Err(RoomError::Unauthorized);
+        }
+        if fingerprint.is_some_and(|fingerprint| fingerprint != state.snapshot.media.fingerprint) {
+            return Err(RoomError::MediaMismatch);
         }
         state.prune(now);
         if state.sessions.len() >= 5 {
@@ -259,6 +283,29 @@ impl RoomHandle {
         state.publish();
         Ok(snapshot)
     }
+
+    /// Apply an action using this room's own monotonic clock. This is the
+    /// entry point for local host controls and broker-relayed guest intents;
+    /// remote clients never get to choose an authoritative timestamp.
+    pub async fn apply_action(
+        &self,
+        session: &SessionToken,
+        action: shared_protocol::PlaybackCommand,
+    ) -> Result<RoomSnapshot, RoomError> {
+        let now = self.clock.now()?;
+        let snapshot = self.snapshot(session).await?;
+        self.apply(
+            session,
+            CommandEnvelope {
+                room_id: snapshot.room_id,
+                media_id: snapshot.media.media_id,
+                command_id: shared_protocol::CommandId::new(),
+                issued_at: now,
+                action,
+            },
+        )
+        .await
+    }
     pub async fn set_control(
         &self,
         session: &SessionToken,
@@ -302,6 +349,19 @@ impl RoomHandle {
             .iter()
             .position(|s| s.id == target)
             .ok_or(RoomError::InvalidInput)?;
+        let removed = state.sessions.remove(index);
+        removed.active.cancelled.cancel();
+        Ok(())
+    }
+    /// End a guest session from its owning client connection. The host session
+    /// can only remove guests through `kick` or by closing the room.
+    pub async fn leave(&self, session: &SessionToken) -> Result<(), RoomError> {
+        let mut state = self.state.lock().await;
+        let now = self.clock.now()?;
+        let index = state.authenticate(session, now)?;
+        if state.sessions[index].id == state.host_id {
+            return Err(RoomError::Forbidden);
+        }
         let removed = state.sessions.remove(index);
         removed.active.cancelled.cancel();
         Ok(())
@@ -405,6 +465,7 @@ mod tests {
             media_id: MediaId::new(),
             size_bytes: WireU64::new(1),
             duration_ms: WireU64::new(1),
+            fingerprint: MediaFingerprint::from_bytes([3; 32]),
         };
         let c = RoomHandle::create(media, "host", clock).unwrap();
         c.room.state.lock().await.snapshot.revision = WireU64::new(u64::MAX);
@@ -457,6 +518,7 @@ mod tests {
             media_id: MediaId::new(),
             size_bytes: WireU64::new(1),
             duration_ms: WireU64::new(1),
+            fingerprint: MediaFingerprint::from_bytes([4; 32]),
         };
         let c = RoomHandle::create(media, "host", clock).unwrap();
         let permit = c

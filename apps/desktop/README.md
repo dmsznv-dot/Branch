@@ -1,4 +1,4 @@
-# Native player proof
+# Branch desktop player and watch rooms
 
 This standalone Tauri workspace renders libmpv below a transparent sibling
 WebView in one parent window. macOS ARM64 uses NSView/NSOpenGLContext/CGL;
@@ -36,10 +36,21 @@ The production CLI build enables `custom-protocol` and embeds local UI assets;
 The dev server binds only `127.0.0.1:1420`; its WebSocket is permitted only by
 `devCsp`. Production script policy is self-only, and navigation rejects remote
 origins. No shell, fs, HTTP or process plugins are installed. Only the main
-window's four typed app commands and event listen/unlisten are granted. File
+window's typed app commands and event listen/unlisten are granted. File
 selection, descriptor ownership, active generation and native geometry stay in
-Rust. Metadata is React text, counters and IDs use strings, and commands expose
-no paths, URLs, properties or arbitrary mpv arguments.
+Rust. Metadata is React text, counters and IDs use strings, and player commands
+expose no paths or arbitrary mpv arguments.
+
+The watch panel starts the authoritative signaling server inside the host's
+Branch process, opens TCP port 8787 through UPnP on the router, discovers its
+public IPv4 address, and creates a short-lived TLS certificate. The certificate
+is pinned through the invitation; no separate server program, TLS proxy, or
+account is used. If the router does not support UPnP or the ISP uses CGNAT,
+direct hosting is unavailable and the app reports that it could not create the
+server. macOS may ask to allow incoming connections. A guest opens a local copy
+of the same file before pasting the invitation. Branch hashes the whole file
+and rejects a mismatch. The server relays playback messages only; it does not
+receive video.
 
 Opening another film supersedes a pending load without waiting for FILE_LOADED.
 Cancelling the chooser retains the current selection. Generation/selection

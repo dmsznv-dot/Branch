@@ -216,7 +216,7 @@ class LuaMakeRecipeTests(unittest.TestCase):
             root=Path(temporary)
             source=root/'source'
             source.mkdir()
-            for name in ('lua.h','luaconf.h','lauxlib.h','lualib.h','lapi.c','ldebug.c'):
+            for name in ('lua.h','luaconf.h','lauxlib.h','lualib.h','lapi.c','ldebug.c','lctype.c','lbitlib.c','lcorolib.c'):
                 (source/name).write_text('fixture\n')
             makefile='CORE_O= lapi.o ltests.o \\\n+  ldebug.o\nAUX_O= lauxlib.o\nLIB_O= linit.o\n'
             (source/'makefile').write_text(makefile.replace('+  ldebug', '  ldebug'))
@@ -238,7 +238,8 @@ class LuaMakeRecipeTests(unittest.TestCase):
 
             command=commands[0]
             self.assertIn('a',command)
-            self.assertIn('CORE_O=lapi.o ldebug.o',command)
+            self.assertIn('CORE_O=lapi.o ldebug.o lctype.o',command)
+            self.assertIn('LIB_O=linit.o lbitlib.o lcorolib.o',command)
             self.assertIn('TESTS=',command)
             self.assertIn('MYCFLAGS=-fPIC -DLUA_USE_MACOSX -O2',command)
             self.assertEqual((prefix/'lib/liblua.a').read_bytes(),b'fixture static archive')

@@ -39,6 +39,15 @@ macro_rules! token {
             pub fn expose(&self) -> &str {
                 &self.0
             }
+            pub fn parse(value: &str) -> Result<Self, RoomError> {
+                let bytes = URL_SAFE_NO_PAD
+                    .decode(value)
+                    .map_err(|_| RoomError::InvalidInput)?;
+                if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&bytes) != value {
+                    return Err(RoomError::InvalidInput);
+                }
+                Ok(Self(value.to_owned()))
+            }
             pub(crate) fn digest(&self) -> TokenDigest {
                 digest(self.expose())
             }

@@ -15,6 +15,6 @@ pub use command::{CommandEnvelope, PlaybackCommand};
 pub use error::{ErrorCode, ProtocolError};
 pub use ids::{ClockEpochId, CommandId, MediaId, ParticipantId, RoomId};
 pub use playback::{HostTime, Playback, PlaybackStatus};
-pub use room::{ControlMode, MediaDescriptor, RoomSnapshot};
+pub use room::{ControlMode, MediaDescriptor, MediaFingerprint, RoomSnapshot};
 pub use speed::Speed;
 pub use wire_u64::WireU64;
