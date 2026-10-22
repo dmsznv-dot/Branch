@@ -972,11 +972,41 @@
   },
   "targets": {
     "aarch64-apple-darwin": {
-      "status": "blocked_pending_native_build_and_inventory",
+      "status": "sdk_and_app_built_distribution_unreviewed",
       "mpv_source": "v0.41.0",
       "ffmpeg_source": "n8.0",
       "artifacts": [],
-      "dependency_graph": {},
+      "dependency_graph": {
+        "dav1d": [],
+        "freetype": [],
+        "fribidi": [],
+        "harfbuzz": [],
+        "libass": [
+          "freetype",
+          "fribidi",
+          "harfbuzz"
+        ],
+        "libplacebo": {
+          "runtime": [],
+          "source_submodules": [
+            "3rdparty/markupsafe",
+            "3rdparty/jinja",
+            "3rdparty/glad",
+            "3rdparty/fast_float",
+            "3rdparty/Vulkan-Headers"
+          ]
+        },
+        "lua": [],
+        "ffmpeg": [
+          "dav1d"
+        ],
+        "mpv": [
+          "ffmpeg",
+          "libass",
+          "libplacebo",
+          "lua"
+        ]
+      },
       "license_inventory_complete": false,
       "mpv_revision": "41f6a645068483470267271e1d09966ca3b9f413",
       "mpv_patches": [
@@ -989,21 +1019,187 @@
           "sha256": "71dcf947cf5c677d76af48818e2363b2a732205f4dd2ae5ad5925ce1c1c0eeac"
         }
       ],
-      "source_lock_complete": false,
-      "source_lock_reason": "Target build closure/toolchain/runtime licensing not observed; primary source pins alone do not authorize a build or bundle.",
+      "source_lock_complete": true,
+      "source_lock_reason": "Every required source and build-generation input is pinned, its actual license files are present, and its recipe and dependency order are checked. The prior native compile caught and closed the Vulkan-Headers dependency used by public headers and disabled Vulkan stubs.",
       "os_floor": "11.0",
       "build_recipe": "scripts/native/build-macos.sh",
-      "build_order": [],
-      "runtime_files": {},
-      "toolchain": {},
-      "build_evidence": {},
+      "build_order": [
+        "dav1d",
+        "freetype",
+        "fribidi",
+        "harfbuzz",
+        "libass",
+        "libplacebo",
+        "lua",
+        "ffmpeg",
+        "mpv"
+      ],
+      "runtime_files": {
+        "mpv": [
+          "lib/libmpv.2.dylib"
+        ],
+        "ffmpeg": [
+          "lib/libavcodec.62.dylib",
+          "lib/libavfilter.11.dylib",
+          "lib/libavformat.62.dylib",
+          "lib/libavutil.60.dylib",
+          "lib/libswresample.6.dylib",
+          "lib/libswscale.9.dylib"
+        ],
+        "dav1d": [
+          "lib/libdav1d.7.dylib"
+        ],
+        "freetype": [
+          "lib/libfreetype.6.dylib"
+        ],
+        "fribidi": [
+          "lib/libfribidi.0.dylib"
+        ],
+        "harfbuzz": [
+          "lib/libharfbuzz.0.dylib"
+        ],
+        "libass": [
+          "lib/libass.9.dylib"
+        ],
+        "libplacebo": [
+          "lib/libplacebo.360.dylib"
+        ]
+      },
+      "toolchain": {
+        "compiler": "clang",
+        "compiler_version": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+        "compiler_sha256": "7f30f076d0e9c38f772a76449fca9da8cf97f6a3d43b94c90a00e4f9ce7ad39e",
+        "provenance": "Xcode 26.3 (build 17C529), /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang",
+        "cxx_compiler": "clang++",
+        "cxx_compiler_version": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+        "cxx_compiler_sha256": "7f30f076d0e9c38f772a76449fca9da8cf97f6a3d43b94c90a00e4f9ce7ad39e",
+        "cxx_provenance": "Xcode 26.3 (build 17C529), /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+      },
+      "build_evidence": {
+        "status": "sdk_and_app_built_distribution_unreviewed",
+        "os": {
+          "name": "macOS",
+          "version": "15.7.1",
+          "build": "24G231",
+          "darwin": "24.6.0",
+          "architecture": "arm64"
+        },
+        "xcode": {
+          "version": "26.3",
+          "build": "17C529",
+          "macos_sdk": "26.2"
+        },
+        "toolchain": {
+          "cc": {
+            "executable": "clang",
+            "sha256": "7f30f076d0e9c38f772a76449fca9da8cf97f6a3d43b94c90a00e4f9ce7ad39e",
+            "version": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+            "provenance": "Xcode 26.3 (build 17C529), /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          },
+          "cxx": {
+            "executable": "clang++",
+            "sha256": "7f30f076d0e9c38f772a76449fca9da8cf97f6a3d43b94c90a00e4f9ce7ad39e",
+            "version": "Apple clang version 17.0.0 (clang-1700.6.4.2)",
+            "provenance": "Xcode 26.3 (build 17C529), /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          }
+        },
+        "os_floor": "11.0",
+        "plan_check": "scripts/native/build-macos.sh --check-plan: source_plan_verified",
+        "sdk_receipt": "target/native/aarch64-apple-darwin/sdk-receipt.json",
+        "sdk_install_name_scheme": "@rpath/<runtime filename>",
+        "sdk_runtime_artifacts": [
+          {
+            "file": "lib/libmpv.2.dylib",
+            "component": "mpv",
+            "sha256": "9fabd4fc405205eece0b2fe594a15db12098f5f0e48083054e2a8d7cc3960946"
+          },
+          {
+            "file": "lib/libavcodec.62.dylib",
+            "component": "ffmpeg",
+            "sha256": "9a8d5a59a1589c3cc1bc05eb71c740f22a68d0fe861018f318219c775845d137"
+          },
+          {
+            "file": "lib/libavfilter.11.dylib",
+            "component": "ffmpeg",
+            "sha256": "d67b51ab26d28519607024584279f75e9db0078f872dbac579108540de79c7fd"
+          },
+          {
+            "file": "lib/libavformat.62.dylib",
+            "component": "ffmpeg",
+            "sha256": "ab9c2dca0db5821290777a7f913b6a544a1c1d1820bb78f3d51c3f080f399b21"
+          },
+          {
+            "file": "lib/libavutil.60.dylib",
+            "component": "ffmpeg",
+            "sha256": "56360b917738dc80dcb969be1174043f06e7e7b513ffe275a90e4db299f81314"
+          },
+          {
+            "file": "lib/libswresample.6.dylib",
+            "component": "ffmpeg",
+            "sha256": "75220220adc2811835397848aa4047b72d0686b5e4219fea48222ce8ed35d647"
+          },
+          {
+            "file": "lib/libswscale.9.dylib",
+            "component": "ffmpeg",
+            "sha256": "9668f97359e24f3923a706b818732b72948479bd85e9293f79e9bc5a8a43b6ab"
+          },
+          {
+            "file": "lib/libdav1d.7.dylib",
+            "component": "dav1d",
+            "sha256": "173542b0cff60a9d5c8e32958d5cfec7845f109d818d120ae1e2f891d838d4db"
+          },
+          {
+            "file": "lib/libfreetype.6.dylib",
+            "component": "freetype",
+            "sha256": "3710df63a49c454fac8eb3f03c1e3a68f8a48744d562c05a4fe7377a8894f6ec"
+          },
+          {
+            "file": "lib/libfribidi.0.dylib",
+            "component": "fribidi",
+            "sha256": "4126644bbd4501a3e833673497b9444ef838af9d84e43182a0c236f704125b1e"
+          },
+          {
+            "file": "lib/libharfbuzz.0.dylib",
+            "component": "harfbuzz",
+            "sha256": "e3ef56d53cda9fac5825f600f37408f01190a5961dfb6ea0df6f34171a5c43e3"
+          },
+          {
+            "file": "lib/libass.9.dylib",
+            "component": "libass",
+            "sha256": "fd9bdb20e6c17c326121e747cfa53a15cec78f4a9587b8099a345b65e553e2c6"
+          },
+          {
+            "file": "lib/libplacebo.360.dylib",
+            "component": "libplacebo",
+            "sha256": "a815abb0c2458f53fbb8e728c5ec5b7a1b72ee47b0c896ba43d09e451a869060"
+          }
+        ],
+        "app": {
+          "path": "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Branch.app",
+          "executable": "Contents/MacOS/desktop",
+          "executable_sha256": "3b75b868b7bb26f0d6d9e55d3632efa316d9f2d5e9e42ea05aca5d9c3027b9f7",
+          "size_bytes": 348444809,
+          "architecture": "arm64",
+          "bundled_runtime_dylibs": 13,
+          "license_resource_files": 46,
+          "static_import_check": "passed with otool: @rpath dependencies resolve inside Contents/Frameworks; no developer-prefix paths",
+          "device_tested": false
+        },
+        "javascript_toolchain": {
+          "node": "v24.21.0",
+          "npm": "12.2.0",
+          "package_engine_warning": "apps/desktop declares Node 24.19.0 and npm 11.9.0; production build succeeded with these installed newer versions."
+        }
+      },
       "required_files": [],
       "sources": {
         "mpv": {
           "url": "https://github.com/mpv-player/mpv.git",
           "revision": "41f6a645068483470267271e1d09966ca3b9f413",
+          "version": "0.41.0",
           "license": "GPL-2.0-or-later",
           "license_files": [
+            "Copyright",
             "LICENSE.GPL",
             "LICENSE.LGPL"
           ],
@@ -1019,6 +1215,7 @@
             "-Dauto_features=disabled",
             "-Dgl=enabled",
             "-Dplain-gl=enabled",
+            "-Dvulkan=disabled",
             "-Dcoreaudio=enabled",
             "-Dbuildtype=release"
           ],
@@ -1033,13 +1230,12 @@
         "ffmpeg": {
           "url": "https://github.com/FFmpeg/FFmpeg.git",
           "revision": "140fd653aed8cad774f991ba083e2d01e86420c7",
-          "tag": "n8.0",
-          "tag_object": "a4044e04486d1136022498891088a90baf5b2775",
-          "pin_evidence": "Authoritative upstream git ls-remote refs/tags/n8.0 and peeled refs/tags/n8.0^{} observed 2026-10-21; no target artifact build claimed.",
+          "version": "n8.0",
           "license": "GPL-2.0-or-later",
           "license_files": [
-            "COPYING.GPLv2",
-            "LICENSE.md"
+            "LICENSE.md",
+            "COPYING.LGPLv2.1",
+            "COPYING.GPLv2"
           ],
           "build_system": "configure",
           "configure_flags": [
@@ -1049,6 +1245,7 @@
             "--disable-doc",
             "--disable-network",
             "--disable-autodetect",
+            "--disable-avdevice",
             "--enable-gpl",
             "--enable-libdav1d",
             "--enable-videotoolbox",
@@ -1058,15 +1255,282 @@
             "dav1d"
           ],
           "recipe": "scripts/native/build-target.py"
+        },
+        "libass": {
+          "url": "https://github.com/libass/libass.git",
+          "revision": "4a05d8127f525943ebf45fdc6497c9e665947f0d",
+          "version": "0.17.5",
+          "license": "ISC",
+          "license_files": [
+            "COPYING"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dtest=disabled",
+            "-Dcompare=disabled",
+            "-Dprofile=disabled",
+            "-Dfuzz=disabled",
+            "-Dcheckasm=disabled",
+            "-Dfontconfig=disabled",
+            "-Dcoretext=enabled",
+            "-Dasm=disabled",
+            "-Dlibunibreak=disabled"
+          ],
+          "dependencies": [
+            "freetype",
+            "fribidi",
+            "harfbuzz"
+          ],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "libplacebo": {
+          "url": "https://code.videolan.org/videolan/libplacebo.git",
+          "revision": "cee9b076f2c63104ccfd497fa79c39a867293ec4",
+          "version": "7.360.1",
+          "license": "LGPL-2.1-or-later",
+          "license_files": [
+            "LICENSE"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dopengl=enabled",
+            "-Dvulkan=disabled",
+            "-Dshaderc=disabled",
+            "-Dglslang=disabled",
+            "-Dlcms=disabled",
+            "-Ddovi=disabled",
+            "-Dlibdovi=disabled",
+            "-Ddemos=false",
+            "-Dtests=false",
+            "-Dbench=false",
+            "-Dfuzz=false",
+            "-Dunwind=disabled",
+            "-Dxxhash=disabled"
+          ],
+          "dependencies": [],
+          "recipe": "scripts/native/build-target.py",
+          "submodule_order": [
+            "3rdparty/markupsafe",
+            "3rdparty/jinja",
+            "3rdparty/glad",
+            "3rdparty/fast_float",
+            "3rdparty/Vulkan-Headers"
+          ],
+          "submodules": [
+            {
+              "path": "3rdparty/markupsafe",
+              "url": "https://github.com/pallets/markupsafe",
+              "revision": "297fc8e356e6836a62087949245d09a28e9f1b13",
+              "version": "3.0.3",
+              "license": "BSD-3-Clause",
+              "license_files": [
+                "LICENSE.txt"
+              ],
+              "build_system": "python-source-module",
+              "configure_flags": [],
+              "dependencies": [],
+              "purpose": "Jinja runtime dependency used by GLAD source generation."
+            },
+            {
+              "path": "3rdparty/jinja",
+              "url": "https://github.com/pallets/jinja",
+              "revision": "15206881c006c79667fe5154fe80c01c65410679",
+              "version": "3.1.6",
+              "license": "BSD-3-Clause",
+              "license_files": [
+                "LICENSE.txt"
+              ],
+              "build_system": "python-source-module",
+              "configure_flags": [],
+              "dependencies": [
+                "3rdparty/markupsafe"
+              ],
+              "purpose": "Template engine imported by the pinned GLAD generator."
+            },
+            {
+              "path": "3rdparty/glad",
+              "url": "https://github.com/Dav1dde/glad",
+              "revision": "73db193f853e2ee079bf3ca8a64aa2eaf6459043",
+              "version": "2.0.8",
+              "license": "MIT",
+              "license_files": [
+                "LICENSE"
+              ],
+              "build_system": "python-build-generator",
+              "configure_flags": [
+                "--reproducible",
+                "--merge",
+                "--api=gl:core,gles2,egl",
+                "--extensions=<gl_extensions from src/opengl/meson.build>",
+                "c",
+                "--header-only",
+                "--mx",
+                "--loader when gl-proc-addr enabled",
+                "local gl.xml and egl.xml copied from pinned glad/files"
+              ],
+              "dependencies": [
+                "3rdparty/jinja",
+                "3rdparty/markupsafe"
+              ],
+              "purpose": "Generates libplacebo OpenGL entry-point header during Meson build.",
+              "generated_inputs": [
+                {
+                  "source": "glad/files/gl.xml",
+                  "build_file": "gl.xml",
+                  "sha256": "5f6729a142ec29f58967381b9efd4bd41ba90749a0f8bffb52bf457d54263461",
+                  "license": "Apache-2.0 inline SPDX header"
+                },
+                {
+                  "source": "glad/files/egl.xml",
+                  "build_file": "egl.xml",
+                  "sha256": "cf6e45572e71bcc0fedf0db1b900445b0b03af71b18e3e25866d1ea0e8ce9a1d",
+                  "license": "Apache-2.0 inline SPDX header"
+                }
+              ]
+            },
+            {
+              "path": "3rdparty/fast_float",
+              "url": "https://github.com/fastfloat/fast_float.git",
+              "revision": "97b54ca9e75f5303507699d27c6b4f4efe4641a1",
+              "version": "8.2.2",
+              "license": "Apache-2.0 OR MIT",
+              "license_files": [
+                "LICENSE-APACHE",
+                "LICENSE-MIT"
+              ],
+              "build_system": "header-only",
+              "configure_flags": [],
+              "dependencies": [],
+              "purpose": "Pinned C++ from_chars implementation required by libplacebo float/double parsing."
+            },
+            {
+              "path": "3rdparty/Vulkan-Headers",
+              "url": "https://github.com/KhronosGroup/Vulkan-Headers",
+              "revision": "450bd2232225d6c7728a4108055ac2e37cef6475",
+              "version": "1.4.337",
+              "license": "Apache-2.0 OR MIT",
+              "license_files": [
+                "LICENSE.md",
+                "LICENSES/Apache-2.0.txt",
+                "LICENSES/MIT.txt"
+              ],
+              "build_system": "header-only",
+              "configure_flags": [],
+              "dependencies": [],
+              "purpose": "Pinned Vulkan API headers included by libplacebo public vulkan.h and disabled Vulkan stubs; no Vulkan runtime or loader is enabled."
+            }
+          ]
+        },
+        "dav1d": {
+          "url": "https://code.videolan.org/videolan/dav1d.git",
+          "revision": "54706fc6bc0cdecab7e9593974a4039cc038fca7",
+          "version": "1.5.4",
+          "license": "BSD-2-Clause",
+          "license_files": [
+            "COPYING"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Denable_tools=false",
+            "-Denable_examples=false",
+            "-Denable_tests=false",
+            "-Denable_docs=false"
+          ],
+          "dependencies": [],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "freetype": {
+          "url": "https://github.com/freetype/freetype.git",
+          "revision": "37515cf56ba3349656049edbed89ffc6f6466f2d",
+          "version": "2.15.0",
+          "license": "FTL",
+          "license_files": [
+            "LICENSE.TXT"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dbrotli=disabled",
+            "-Dbzip2=disabled",
+            "-Dharfbuzz=disabled",
+            "-Dpng=disabled",
+            "-Dzlib=disabled",
+            "-Dtests=disabled",
+            "-Dhvf=disabled"
+          ],
+          "dependencies": [],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "fribidi": {
+          "url": "https://github.com/fribidi/fribidi.git",
+          "revision": "b93119f5fdc7ea47672cc304c1455ffa6dfe7536",
+          "version": "1.0.17",
+          "license": "LGPL-2.1-or-later",
+          "license_files": [
+            "COPYING"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dbin=false",
+            "-Ddocs=false",
+            "-Dtests=false"
+          ],
+          "dependencies": [],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "harfbuzz": {
+          "url": "https://github.com/harfbuzz/harfbuzz.git",
+          "revision": "c7a7457b7385f33178e8cf87615ca077a810bbe7",
+          "version": "14.6.0",
+          "license": "MIT",
+          "license_files": [
+            "COPYING"
+          ],
+          "build_system": "meson",
+          "configure_flags": [
+            "-Dglib=disabled",
+            "-Dgobject=disabled",
+            "-Dcairo=disabled",
+            "-Dchafa=disabled",
+            "-Dpng=disabled",
+            "-Dzlib=disabled",
+            "-Dicu=disabled",
+            "-Dgraphite2=disabled",
+            "-Dfreetype=disabled",
+            "-Dcoretext=disabled",
+            "-Dtests=disabled",
+            "-Ddocs=disabled",
+            "-Dintrospection=disabled",
+            "-Dutilities=disabled",
+            "-Draster=disabled",
+            "-Dvector=disabled",
+            "-Dgpu=disabled",
+            "-Dsubset=disabled",
+            "-Dbenchmark=disabled"
+          ],
+          "dependencies": [],
+          "recipe": "scripts/native/build-target.py"
+        },
+        "lua": {
+          "url": "https://github.com/lua/lua.git",
+          "revision": "4324904b60db5243ede68d0922c1bf3c0dd05986",
+          "version": "5.2.4",
+          "license": "MIT",
+          "license_files": [
+            "lua.h"
+          ],
+          "build_system": "lua-make",
+          "configure_flags": [
+            "-fPIC",
+            "-DLUA_USE_MACOSX"
+          ],
+          "dependencies": [],
+          "recipe": "scripts/native/build-target.py"
         }
       },
       "unresolved_dependencies": [
-        "libass and font/text shaping closure (FreeType, HarfBuzz, FriBidi and chosen font backend)",
-        "libplacebo closure and disabled/enabled GPU compiler backends",
-        "Lua 5.2 source and shared build recipe",
-        "dav1d AV1 software decoder",
-        "native compiler/build-tool provenance and redistributable runtime closure",
-        "all produced artifact hashes, parsed imports, exact license/notices/corresponding-source inventory",
+        "complete verifier-generated bundle inventory with hashes and parsed imports for every bundle file",
+        "distribution license review, notices and corresponding-source obligations",
+        "native device/runtime acceptance and clean-machine launch; not run by request",
         "verified fixture generation for native CI"
       ],
       "license_obligations": {
@@ -1077,7 +1541,14 @@
       },
       "fixture_inventory_complete": false,
       "ci_toolchain_provisioning": "BLOCKED: complete and verify native source/toolchain closure before enabling the conditional native steps.",
-      "ci_extracted_bundle": null
+      "ci_extracted_bundle": null,
+      "system_dependencies": [
+        "Xcode macOS 11+ SDK and libSystem/libm",
+        "macOS CoreText, CoreFoundation and ApplicationServices frameworks for libass Core Text font provider",
+        "macOS CoreAudio/AudioToolbox and VideoToolbox frameworks for audio and hardware decode",
+        "macOS OpenGL framework for the libmpv render API and libplacebo OpenGL backend",
+        "Python 3 used by Meson to run pinned GLAD/Jinja/MarkupSafe source modules; GL and EGL XML inputs are SHA256-pinned copies from the GLAD commit"
+      ]
     },
     "x86_64-pc-windows-msvc": {
       "status": "blocked_pending_native_build_and_inventory",

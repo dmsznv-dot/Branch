@@ -37,7 +37,6 @@ def relative(value):
 def validate_plan(manifest, target):
     need(target in ('aarch64-apple-darwin', 'x86_64-pc-windows-msvc'), 'target')
     pin = manifest.get('targets', {}).get(target, {})
-    need(pin.get('source_lock_complete') is True, 'source_lock_incomplete')
     sources, order = pin.get('sources', {}), pin.get('build_order', [])
     need(order and len(order) == len(set(order)) and set(order) == set(sources), 'dependency_order')
     need({'mpv', 'ffmpeg', 'libass', 'libplacebo', 'lua', 'dav1d'}.issubset(sources), 'dependency_order')
@@ -48,16 +47,47 @@ def validate_plan(manifest, target):
         need(source.get('license') not in (None, '', 'unknown', 'NOASSERTION') and source.get('license_files'), 'source_license')
         for value in source['license_files']:
             relative(value)
-        need(source.get('build_system') in ('cmake', 'meson', 'configure') and isinstance(source.get('configure_flags'), list) and source['configure_flags'] and all(isinstance(value, str) for value in source['configure_flags']), 'source_recipe')
+        need(source.get('build_system') in ('cmake', 'meson', 'configure', 'lua-make') and isinstance(source.get('configure_flags'), list) and source['configure_flags'] and all(isinstance(value, str) for value in source['configure_flags']), 'source_recipe')
+        need(source['build_system'] != 'lua-make' or (name == 'lua' and target == 'aarch64-apple-darwin'), 'source_recipe')
         for flag in source['configure_flags']:
             option = flag.split('=', 1)[0]
             cmake_option = flag[2:] if flag.startswith('-D') else flag
             need(option not in ('CC', 'CXX', '--cc', '--cxx', '--native-file', '--cross-file', '--toolchain')
                  and not cmake_option.startswith(('CMAKE_C_COMPILER', 'CMAKE_CXX_COMPILER', 'CMAKE_TOOLCHAIN_FILE')), 'compiler_override')
         need(set(source.get('dependencies', [])).issubset(seen), 'dependency_order')
+        for submodule in source.get('submodules', []):
+            relative(submodule.get('path'))
+            need(submodule.get('url', '').startswith('https://') and
+                 re.fullmatch(r'[0-9a-f]{40}', submodule.get('revision', '')) and
+                 submodule.get('license') not in (None, '', 'unknown', 'NOASSERTION') and
+                 submodule.get('license_files') and
+                 all(relative(value) for value in submodule['license_files']) and
+                 submodule.get('build_system') in
+                 ('python-source-module', 'python-build-generator', 'header-only') and
+                 isinstance(submodule.get('configure_flags'), list) and
+                 all(isinstance(value, str) for value in submodule['configure_flags']),
+                 'submodule_pin')
+            for generated_input in submodule.get('generated_inputs', []):
+                relative(generated_input.get('source'))
+                relative(generated_input.get('build_file'))
+                need(re.fullmatch(r'[0-9a-f]{64}', generated_input.get('sha256', '')),
+                     'submodule_generated_input')
+        if source.get('submodules'):
+            submodule_paths = [entry['path'] for entry in source['submodules']]
+            submodule_order = source.get('submodule_order', [])
+            need(len(submodule_paths) == len(set(submodule_paths)) and
+                 len(submodule_order) == len(set(submodule_order)) and
+                 set(submodule_order) == set(submodule_paths), 'submodule_order')
+            submodules_by_path = {entry['path']: entry for entry in source['submodules']}
+            seen_submodules = set()
+            for submodule_path in submodule_order:
+                need(set(submodules_by_path[submodule_path].get('dependencies', []))
+                     .issubset(seen_submodules), 'submodule_order')
+                seen_submodules.add(submodule_path)
         seen.add(name)
     need(sources['ffmpeg']['revision'] == FFMPEG_COMMIT and sources['ffmpeg']['url'] == 'https://github.com/FFmpeg/FFmpeg.git', 'ffmpeg_pin')
     need({'--enable-shared', '--disable-static', '--disable-programs', '--enable-gpl', '--enable-libdav1d'}.issubset(sources['ffmpeg']['configure_flags']) and 'dav1d' in sources['ffmpeg']['dependencies'], 'ffmpeg_flags')
+    need('--disable-postproc' not in sources['ffmpeg']['configure_flags'], 'ffmpeg_flags')
     mpv = manifest['linux_development']['mpv']
     need(sources['mpv']['revision'] == mpv['revision'] and sources['mpv']['url'] == mpv['source_url'], 'mpv_pin')
     need(pin.get('mpv_patches') == [{key: item[key] for key in ('file', 'sha256')} for item in mpv['patches']], 'mpv_patch')
@@ -73,6 +103,10 @@ def validate_plan(manifest, target):
     need(runtime and {'mpv', 'ffmpeg'}.issubset(runtime) and set(runtime).issubset(sources), 'runtime_file_plan')
     for files in runtime.values():
         need(files and all(relative(name) for name in files), 'runtime_file_plan')
+    # Validate every recorded field before honoring the readiness assertion.
+    # This lets reviewers use --check-plan to identify plan defects without
+    # prematurely marking an incomplete source lock as ready.
+    need(pin.get('source_lock_complete') is True, 'source_lock_incomplete')
     return pin
 
 
@@ -112,6 +146,44 @@ def archive_source(source, destination, env=None):
                        stdout=archive, env=source_git_environment(env), check=True)
 
 
+def initialize_pinned_submodules(source, submodules, env, log):
+    if not submodules:
+        return
+    config = subprocess.check_output(
+        ['git', '-C', str(source), 'config', '-f', '.gitmodules', '--get-regexp',
+         r'^submodule\..*\.path$'], env=source_git_environment(), text=True)
+    paths = {}
+    for line in config.splitlines():
+        key, value = line.split(None, 1)
+        name = key[len('submodule.'):-len('.path')]
+        paths[value] = name
+    for item in submodules:
+        relative_path = relative(item['path'])
+        name = paths.get(relative_path)
+        need(name is not None, 'submodule_path')
+        url = subprocess.check_output(
+            ['git', '-C', str(source), 'config', '-f', '.gitmodules', '--get',
+             'submodule.' + name + '.url'], env=source_git_environment(), text=True).strip()
+        need(url == item['url'], 'submodule_url')
+        tree_entry = subprocess.check_output(
+            ['git', '-C', str(source), 'ls-tree', 'HEAD', '--', relative_path],
+            env=source_git_environment(), text=True).strip().split()
+        need(len(tree_entry) >= 3 and tree_entry[1] == 'commit' and
+             tree_entry[2] == item['revision'], 'submodule_pin')
+        run(['git', '-C', str(source), 'submodule', 'update', '--init',
+             '--depth=1', '--', relative_path], source, env, log)
+        checkout = source / relative_path
+        need(checkout.resolve().is_relative_to(source.resolve()), 'submodule_path')
+        need(subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'],
+             env=source_git_environment(env), text=True).strip() == item['revision'],
+             'submodule_pin')
+        verify_pristine_source(checkout)
+        for license_file in item['license_files']:
+            path = checkout / relative(license_file)
+            need(path.is_file() and path.resolve().is_relative_to(checkout.resolve()),
+                 'source_license')
+
+
 def select_toolchain(toolchain, inherited):
     env, receipt = dict(inherited), {}
     need(not env.get('CMAKE_TOOLCHAIN_FILE'), 'compiler_override')
@@ -149,6 +221,104 @@ def prepare_generated_outputs(work):
     return prefix, logs, notices
 
 
+def build_lua_make(source, build, prefix, env, flags, log):
+    """Build the pinned Lua source with its upstream makefile as PIC static code.
+
+    Lua 5.2's upstream makefile only creates liblua.a. The SDK needs a
+    position-independent archive so mpv can link it into libmpv.dylib.
+    Stage the pristine source into the separate build directory, disable its
+    test-only ltests object, then install headers and a lua52.pc file.
+    """
+    need(platform.system() == 'Darwin', 'lua_make_target')
+    makefile = source / 'makefile'
+    need(makefile.is_file(), 'lua_makefile')
+    text = makefile.read_text()
+    match = re.search(r'(?m)^CORE_O=\s*((?:[^\n]*\\\n)*[^\n]*)', text)
+    need(match is not None, 'lua_makefile')
+    core_objects = re.sub(r'\\\n\s*', ' ', match.group(1)).split()
+    need('ltests.o' in core_objects, 'lua_makefile')
+    core_objects.remove('ltests.o')
+
+    staged = build / 'lua-source'
+    staged.mkdir()
+    for path in source.iterdir():
+        if path.is_file() and (path.suffix in ('.c', '.h') or path.name == 'makefile'):
+            shutil.copy2(path, staged / path.name)
+
+    make = shutil.which('make', path=env.get('PATH'))
+    need(make, 'build_tool_missing')
+    mycflags = ' '.join([*flags, *shlex.split(env.get('CFLAGS', ''))])
+    command = [make, '-C', str(staged), '-f', 'makefile', '-j3', 'a',
+               'CC=' + env['CC'], 'AR=ar rcu', 'RANLIB=ranlib',
+               'TESTS=', 'MYCFLAGS=' + mycflags,
+               'CORE_O=' + ' '.join(core_objects)]
+    run(command, build, env, log)
+
+    library = staged / 'liblua.a'
+    need(library.is_file(), 'lua_library_missing')
+    libdir = prefix / 'lib'
+    includedir = prefix / 'include/lua5.2'
+    pcdir = libdir / 'pkgconfig'
+    libdir.mkdir(parents=True, exist_ok=True)
+    includedir.mkdir(parents=True, exist_ok=True)
+    pcdir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(library, libdir / 'liblua.a')
+    for name in ('lua.h', 'luaconf.h', 'lauxlib.h', 'lualib.h'):
+        header = source / name
+        need(header.is_file(), 'lua_header_missing')
+        shutil.copy2(header, includedir / name)
+    (pcdir / 'lua5.2.pc').write_text(
+        'prefix=' + str(prefix) + '\n'
+        'libdir=${prefix}/lib\n'
+        'includedir=${prefix}/include/lua5.2\n\n'
+        'Name: Lua 5.2\nDescription: Lua 5.2 static library\n'
+        'Version: 5.2.4\nLibs: -L${libdir} -llua -lm\n'
+        'Cflags: -I${includedir}\n'
+    )
+
+
+def stage_generator_inputs(source, build, submodules):
+    """Stage hash-locked generated-code inputs in the Meson build root."""
+    for submodule in submodules:
+        for item in submodule.get('generated_inputs', []):
+            source_file = source / relative(submodule['path']) / relative(item['source'])
+            need(source_file.is_file() and
+                 hashlib.sha256(source_file.read_bytes()).hexdigest() == item['sha256'],
+                 'submodule_generated_input')
+            output = build / relative(item['build_file'])
+            need(not output.exists(), 'submodule_generated_input')
+            shutil.copy2(source_file, output)
+
+
+def relocate_macos_libraries(prefix, runtime_files, env, log):
+    """Give SDK dylibs relocatable IDs and references for Tauri Frameworks."""
+    need(shutil.which('install_name_tool', path=env.get('PATH')) and
+         shutil.which('otool', path=env.get('PATH')), 'build_tool_missing')
+    libraries = [prefix / relative(name)
+                 for files in runtime_files.values() for name in files]
+    need(all(path.is_file() for path in libraries), 'runtime_artifact_missing')
+    library_names = {path.name for path in libraries}
+    for library in libraries:
+        run(['install_name_tool', '-id', '@rpath/' + library.name, str(library)],
+            REPO, env, log)
+    sdk_lib = (prefix / 'lib').resolve()
+    for library in libraries:
+        loads = subprocess.check_output(['otool', '-L', str(library)],
+                                        env=env, text=True).splitlines()[1:]
+        for line in loads:
+            dependency = line.strip().split(' (compatibility', 1)[0]
+            candidate = Path(dependency)
+            if (candidate.parent.resolve() == sdk_lib and
+                    candidate.name in library_names):
+                run(['install_name_tool', '-change', dependency,
+                     '@rpath/' + candidate.name, str(library)], REPO, env, log)
+    for library in libraries:
+        loads = subprocess.check_output(['otool', '-L', str(library)],
+                                        env=env, text=True).splitlines()[1:]
+        need(all(not line.strip().split(' (compatibility', 1)[0].startswith(str(sdk_lib) + '/')
+                 for line in loads), 'absolute_runtime_import')
+
+
 def build_sdk(pin, target, manifest_path, work):
     mac = target == 'aarch64-apple-darwin'
     need((mac and platform.system() == 'Darwin' and platform.machine() == 'arm64') or (not mac and os.name == 'nt'), 'native_host_required')
@@ -156,6 +326,9 @@ def build_sdk(pin, target, manifest_path, work):
         need(shutil.which(command), 'build_tool_missing')
     env, toolchain = select_toolchain(pin['toolchain'], os.environ)
     env = source_git_environment(env)
+    # Meson source generators import modules from pinned Git submodules.
+    # Keep Python bytecode caches out of those pristine source checkouts.
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
     prefix, logs, notices = prepare_generated_outputs(work)
     env.update(PKG_CONFIG_PATH=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), PKG_CONFIG_LIBDIR=str(prefix / 'lib/pkgconfig') + os.pathsep + str(prefix / 'share/pkgconfig'), CMAKE_PREFIX_PATH=str(prefix), CMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local')
     env['PATH'] = str(prefix / 'bin') + os.pathsep + env['PATH']
@@ -186,6 +359,7 @@ def build_sdk(pin, target, manifest_path, work):
             run([sys.executable, str(REPO / 'scripts/native/verify-mpv-source.py'), str(source), str(manifest_path), str(REPO), '--apply'], work, env, log)
         else:
             verify_pristine_source(source)
+        initialize_pinned_submodules(source, item.get('submodules', []), env, log)
         for license_file in item['license_files']:
             path = source / relative(license_file)
             need(path.is_file() and path.resolve().is_relative_to(source.resolve()), 'source_license')
@@ -193,6 +367,7 @@ def build_sdk(pin, target, manifest_path, work):
         if item['build_system'] == 'meson':
             need(not (build / 'meson-private/coredata.dat').exists(), 'fresh_build_directory_required')
             run(['meson', 'setup', str(build), str(source), '--prefix=' + str(prefix), '--default-library=shared', '--wrap-mode=nofallback', *flags], work, env, log)
+            stage_generator_inputs(source, build, item.get('submodules', []))
             run(['meson', 'compile', '-C', str(build), '-j3'], work, env, log)
             run(['meson', 'install', '-C', str(build)], work, env, log)
         elif item['build_system'] == 'cmake':
@@ -200,6 +375,8 @@ def build_sdk(pin, target, manifest_path, work):
             run(['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_INSTALL_PREFIX=' + str(prefix), '-DBUILD_SHARED_LIBS=ON', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', *options, *flags, '-DCMAKE_C_COMPILER=' + env['CC'], '-DCMAKE_CXX_COMPILER=' + env['CXX']], work, env, log)
             run(['cmake', '--build', str(build), '--parallel', '3'], work, env, log)
             run(['cmake', '--install', str(build)], work, env, log)
+        elif item['build_system'] == 'lua-make':
+            build_lua_make(source, build, prefix, env, flags, log)
         else:
             drivers = ['--cc=' + env['CC'], '--cxx=' + env['CXX']] if name == 'ffmpeg' else []
             run(['sh', str(source / 'configure'), '--prefix=' + prefix.as_posix(), *flags, *drivers], build, env, log)
@@ -210,11 +387,27 @@ def build_sdk(pin, target, manifest_path, work):
         for license_file in item['license_files']:
             shutil.copy2(source / license_file, component_notices / Path(license_file).name)
         archive_source(source, component_notices / (name + '-source.tar'), env)
+        submodule_receipts = []
+        for submodule in item.get('submodules', []):
+            checkout = source / relative(submodule['path'])
+            sub_notice = component_notices / 'submodules' / Path(submodule['path']).name
+            sub_notice.mkdir(parents=True)
+            for license_file in submodule['license_files']:
+                shutil.copy2(checkout / relative(license_file),
+                             sub_notice / Path(license_file).name)
+            archive_source(checkout,
+                           sub_notice / (Path(submodule['path']).name + '-source.tar'), env)
+            submodule_receipts.append({key: submodule[key] for key in
+                                       ('path', 'url', 'revision', 'license', 'license_files')})
         if name == 'mpv':
             for patch in pin['mpv_patches']:
                 shutil.copy2(REPO / patch['file'], component_notices / Path(patch['file']).name)
-        receipts[name] = {key: item[key] for key in ('url', 'revision', 'license', 'configure_flags', 'dependencies', 'build_system')}
+        receipts[name] = {key: item[key] for key in ('url', 'revision', 'license', 'license_files', 'configure_flags', 'dependencies', 'build_system')}
+        if submodule_receipts:
+            receipts[name]['submodules'] = submodule_receipts
         (component_notices / 'SOURCE-BUILD.json').write_text(json.dumps(receipts[name], indent=2) + '\n')
+    if mac:
+        relocate_macos_libraries(prefix, pin['runtime_files'], env, logs / 'relocate.log')
     artifacts = []
     for component, names in pin['runtime_files'].items():
         for name in names:
@@ -227,7 +420,7 @@ def build_sdk(pin, target, manifest_path, work):
         need(len(dlls) == 1, 'mpv_dll_name')
         run(['gendef', str(dlls[0])], work, env, logs / 'import-library.log')
         run(['lib.exe', '/nologo', '/machine:x64', '/def:' + str(work / 'libmpv-2.def'), '/out:' + str(prefix / 'lib/mpv.lib')], work, env, logs / 'import-library.log')
-    evidence = {'status': 'sdk_built_distribution_unreviewed', 'target': target, 'os': platform.system() + ' ' + platform.release(), 'toolchain': toolchain, 'os_floor': pin['os_floor'], 'sources': receipts, 'artifacts': artifacts, 'mpv_patches': pin['mpv_patches']}
+    evidence = {'status': 'sdk_built_distribution_unreviewed', 'target': target, 'os': platform.system() + ' ' + platform.release(), 'toolchain': toolchain, 'os_floor': pin['os_floor'], 'install_name_scheme': '@rpath/<runtime filename>', 'sources': receipts, 'artifacts': artifacts, 'mpv_patches': pin['mpv_patches']}
     (work / 'sdk-receipt.json').write_text(json.dumps(evidence, indent=2) + '\n')
     # No paths are emitted in the shareable receipt. Activation is local only.
     resources = {str(path): 'licenses/' + path.relative_to(notices).as_posix() for path in notices.rglob('*') if path.is_file()}

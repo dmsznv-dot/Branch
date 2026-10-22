@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / 'scripts/native/build-target.py'
@@ -30,6 +31,7 @@ class SourcePlanTests(unittest.TestCase):
         self.pin['sources'] = {name:{'url':'https://example.invalid/'+name+'.git', 'revision':'b'*40, 'license':'MIT', 'license_files':['LICENSE'], 'build_system':'meson', 'configure_flags':['-Dtests=false'], 'dependencies':[]} for name in self.pin['build_order']}
         self.pin['sources']['mpv'].update(url='https://github.com/mpv-player/mpv.git',revision=self.base['linux_development']['mpv']['revision'], license='GPL-2.0-or-later', configure_flags=self.base['linux_development']['mpv']['configure_flags'], dependencies=['ffmpeg','libass','libplacebo','lua'])
         self.pin['sources']['ffmpeg'].update(url='https://github.com/FFmpeg/FFmpeg.git', revision='140fd653aed8cad774f991ba083e2d01e86420c7', license='GPL-2.0-or-later', build_system='configure', configure_flags=['--enable-shared','--disable-static','--disable-programs','--enable-gpl','--enable-libdav1d'], dependencies=['dav1d'])
+        self.pin['sources']['lua'].update(build_system='lua-make', configure_flags=['-fPIC','-DLUA_USE_MACOSX'])
 
     def run_plan(self):
         self.base['targets'][self.target] = self.pin
@@ -55,6 +57,13 @@ class SourcePlanTests(unittest.TestCase):
         self.pin['sources']['ffmpeg']['revision']='c'*40
         self.reject('ffmpeg_pin')
 
+    def test_ffmpeg_plan_does_not_use_removed_postproc_option(self):
+        self.assertNotIn('--disable-postproc',self.pin['sources']['ffmpeg']['configure_flags'])
+        result=self.run_plan()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.pin['sources']['ffmpeg']['configure_flags'].append('--disable-postproc')
+        self.reject('ffmpeg_flags')
+
     def test_wrong_mpv_patch_hash_is_rejected(self):
         self.pin['mpv_patches'][0]['sha256']='d'*64
         self.reject('mpv_patch')
@@ -71,12 +80,96 @@ class SourcePlanTests(unittest.TestCase):
         self.pin['toolchain'].pop('cxx_provenance')
         self.reject('toolchain_provenance')
 
+    def test_lua_uses_the_dedicated_macos_make_recipe(self):
+        result=self.run_plan()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.pin['sources']['lua']['build_system']='make'
+        self.reject('source_recipe')
+
+    def test_plan_errors_are_reported_before_the_readiness_flag(self):
+        self.pin['source_lock_complete']=False
+        self.pin['sources']['lua']['build_system']='make'
+        self.reject('source_recipe')
+
+    def test_submodules_require_pins_licenses_and_dependency_order(self):
+        placebo=self.pin['sources']['libplacebo']
+        placebo['submodules']=[
+            {'path':'thirdparty/markup','url':'https://example.invalid/markup.git','revision':'c'*40,'license':'BSD-3-Clause','license_files':['LICENSE'],'build_system':'python-source-module','configure_flags':[],'dependencies':[]},
+            {'path':'thirdparty/template','url':'https://example.invalid/template.git','revision':'d'*40,'license':'BSD-3-Clause','license_files':['LICENSE'],'build_system':'python-source-module','configure_flags':[],'dependencies':['thirdparty/markup']},
+            {'path':'thirdparty/glad','url':'https://example.invalid/glad.git','revision':'e'*40,'license':'MIT','license_files':['LICENSE'],'build_system':'python-build-generator','configure_flags':[],'dependencies':['thirdparty/template']},
+        ]
+        placebo['submodule_order']=['thirdparty/markup','thirdparty/template','thirdparty/glad']
+        result=self.run_plan()
+        self.assertEqual(result.returncode,0,result.stderr)
+        placebo['submodules'][2]['license_files']=[]
+        self.reject('submodule_pin')
+        placebo['submodules'][2]['license_files']=['LICENSE']
+        placebo['submodule_order']=['thirdparty/glad','thirdparty/template','thirdparty/markup']
+        self.reject('submodule_order')
+
+    def test_generated_submodule_inputs_require_safe_paths_and_hashes(self):
+        glad={'path':'thirdparty/glad','url':'https://example.invalid/glad.git','revision':'e'*40,
+              'license':'MIT','license_files':['LICENSE'],'build_system':'python-build-generator',
+              'configure_flags':[],'dependencies':[],
+              'generated_inputs':[{'source':'glad/files/gl.xml','build_file':'gl.xml','sha256':'f'*64}]}
+        placebo=self.pin['sources']['libplacebo']
+        placebo['submodules']=[glad]
+        placebo['submodule_order']=['thirdparty/glad']
+        result=self.run_plan()
+        self.assertEqual(result.returncode,0,result.stderr)
+        glad['generated_inputs'][0]['build_file']='../gl.xml'
+        self.reject('plan_path')
+
     def test_recipe_cannot_override_selected_compilers(self):
         for flag in ['-DCMAKE_C_COMPILER=unreviewed', 'CMAKE_TOOLCHAIN_FILE=unreviewed', '--native-file=unreviewed', '--cc=unreviewed']:
             with self.subTest(flag=flag):
                 self.pin['sources']['libass']['configure_flags']=['-Dtests=false', flag]
                 self.reject('compiler_override')
 
+
+class GeneratorInputTests(unittest.TestCase):
+    def test_generator_inputs_are_hash_checked_and_staged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/'source'
+            build=root/'build'
+            generator=source/'3rdparty/glad/glad/files'
+            generator.mkdir(parents=True)
+            build.mkdir()
+            original=b'<registry pinned />\n'
+            (generator/'gl.xml').write_bytes(original)
+            item={'path':'3rdparty/glad','generated_inputs':[{'source':'glad/files/gl.xml','build_file':'gl.xml','sha256':hashlib.sha256(original).hexdigest()}]}
+            BUILDER_MODULE.stage_generator_inputs(source,build,[item])
+            self.assertEqual((build/'gl.xml').read_bytes(),original)
+            (build/'gl.xml').unlink()
+            (generator/'gl.xml').write_bytes(b'<registry changed />\n')
+            with self.assertRaises(BUILDER_MODULE.Blocked) as blocked:
+                BUILDER_MODULE.stage_generator_inputs(source,build,[item])
+            self.assertEqual(str(blocked.exception),'submodule_generated_input')
+
+
+class MacOSRelocationTests(unittest.TestCase):
+    def test_sdk_install_names_and_internal_loads_use_rpath(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix=Path(temporary)/'sdk'
+            (prefix/'lib').mkdir(parents=True)
+            first=prefix/'lib/libfirst.dylib'
+            second=prefix/'lib/libsecond.dylib'
+            first.touch(); second.touch()
+            outputs=iter([
+                f'{first}:\n  {second} (compatibility version 1.0.0, current version 1.0.0)\n',
+                f'{second}:\n',
+                f'{first}:\n  @rpath/libsecond.dylib (compatibility version 1.0.0, current version 1.0.0)\n',
+                f'{second}:\n',
+            ])
+            with mock.patch.object(BUILDER_MODULE.shutil,'which',return_value='/usr/bin/tool'), \
+                 mock.patch.object(BUILDER_MODULE.subprocess,'check_output',side_effect=lambda *args,**kwargs: next(outputs)), \
+                 mock.patch.object(BUILDER_MODULE,'run') as run:
+                BUILDER_MODULE.relocate_macos_libraries(prefix,{'first':['lib/libfirst.dylib'],'second':['lib/libsecond.dylib']},{},Path(temporary)/'relocate.log')
+            commands=[call.args[0] for call in run.call_args_list]
+            self.assertIn(['install_name_tool','-id','@rpath/libfirst.dylib',str(first)],commands)
+            self.assertIn(['install_name_tool','-id','@rpath/libsecond.dylib',str(second)],commands)
+            self.assertIn(['install_name_tool','-change',str(second),'@rpath/libsecond.dylib',str(first)],commands)
 
 class ToolchainTests(unittest.TestCase):
     def setUp(self):
@@ -115,6 +208,43 @@ class ToolchainTests(unittest.TestCase):
         with self.assertRaises(BUILDER_MODULE.Blocked) as rejected:
             BUILDER_MODULE.select_toolchain(self.toolchain,{'CMAKE_TOOLCHAIN_FILE':'unreviewed.cmake'})
         self.assertEqual(str(rejected.exception),'compiler_override')
+
+
+class LuaMakeRecipeTests(unittest.TestCase):
+    def test_lua_make_recipe_builds_pic_archive_and_installs_pkg_config_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/'source'
+            source.mkdir()
+            for name in ('lua.h','luaconf.h','lauxlib.h','lualib.h','lapi.c','ldebug.c'):
+                (source/name).write_text('fixture\n')
+            makefile='CORE_O= lapi.o ltests.o \\\n+  ldebug.o\nAUX_O= lauxlib.o\nLIB_O= linit.o\n'
+            (source/'makefile').write_text(makefile.replace('+  ldebug', '  ldebug'))
+            build=root/'build'
+            build.mkdir()
+            prefix=root/'sdk'
+            prefix.mkdir()
+            commands=[]
+
+            def fake_run(command, cwd, env, log):
+                commands.append(command)
+                staged=Path(command[2])
+                (staged/'liblua.a').write_bytes(b'fixture static archive')
+
+            with mock.patch.object(BUILDER_MODULE,'run',side_effect=fake_run):
+                BUILDER_MODULE.build_lua_make(source,build,prefix,
+                    {'PATH':os.environ['PATH'],'CC':'/usr/bin/clang','CFLAGS':'-O2'},
+                    ['-fPIC','-DLUA_USE_MACOSX'],root/'lua.log')
+
+            command=commands[0]
+            self.assertIn('a',command)
+            self.assertIn('CORE_O=lapi.o ldebug.o',command)
+            self.assertIn('TESTS=',command)
+            self.assertIn('MYCFLAGS=-fPIC -DLUA_USE_MACOSX -O2',command)
+            self.assertEqual((prefix/'lib/liblua.a').read_bytes(),b'fixture static archive')
+            self.assertIn('Version: 5.2.4',(prefix/'lib/pkgconfig/lua5.2.pc').read_text())
+            self.assertIn('-llua -lm',(prefix/'lib/pkgconfig/lua5.2.pc').read_text())
+            self.assertEqual((source/'lapi.c').read_text(),'fixture\n')
 
 
 class SymlinkDriverTests(unittest.TestCase):
